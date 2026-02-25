@@ -95,6 +95,20 @@ public class EvaluationCriterion {
 	 */
 	private CriterionBatchingConfig batchingConfig;
 
+	/**
+	 * Conditional execution configuration.
+	 * When set, the criterion will only execute if the condition is satisfied.
+	 * Otherwise, it returns the configured default value and is marked as SKIPPED.
+	 */
+	private ConditionalExecutionConfig conditionalExecution;
+
+	/**
+	 * Multimodal configuration.
+	 * When set and enabled, the criterion will process multimodal inputs (e.g., images)
+	 * using a multimodal-capable LLM evaluator.
+	 */
+	private MultimodalConfig multimodalConfig;
+
 	public String getName() {
 		return name;
 	}
@@ -205,6 +219,22 @@ public class EvaluationCriterion {
 
 	public void setBatchingConfig(CriterionBatchingConfig batchingConfig) {
 		this.batchingConfig = batchingConfig;
+	}
+
+	public ConditionalExecutionConfig getConditionalExecution() {
+		return conditionalExecution;
+	}
+
+	public void setConditionalExecution(ConditionalExecutionConfig conditionalExecution) {
+		this.conditionalExecution = conditionalExecution;
+	}
+
+	public MultimodalConfig getMultimodalConfig() {
+		return multimodalConfig;
+	}
+
+	public void setMultimodalConfig(MultimodalConfig multimodalConfig) {
+		this.multimodalConfig = multimodalConfig;
 	}
 
 	/**

@@ -16,10 +16,14 @@
 package com.alibaba.assistant.agent.core.tool;
 
 import com.alibaba.assistant.agent.common.tools.CodeactTool;
+import com.alibaba.assistant.agent.core.model.ToolCallRecord;
 import com.alibaba.assistant.agent.core.tool.schema.ReturnSchemaRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ToolContext;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * ToolRegistry Bridge - 供 Python 调用的 Java 对象。
@@ -39,6 +43,11 @@ public class ToolRegistryBridge {
 	private final ToolContext toolContext;
 
 	/**
+	 * 工具调用追踪记录
+	 */
+	private final List<ToolCallRecord> callTrace = new ArrayList<>();
+
+	/**
 	 * 构造函数。
 	 * @param registry 工具注册表
 	 * @param toolContext 工具上下文
@@ -56,8 +65,13 @@ public class ToolRegistryBridge {
 	 * @return 工具执行结果（JSON 字符串）
 	 */
 	public String callTool(String toolName, String argsJson) {
-		logger.info("ToolRegistryBridge#callTool - reason=Python调用工具开始, toolName={}, argsJsonLength={}",
-				toolName, argsJson != null ? argsJson.length() : 0);
+		logger.info("ToolRegistryBridge#callTool - reason=Python调用工具开始, toolName={}, argsJsonLength={}, hasToolContext={}, toolContextKeys={}",
+				toolName, argsJson != null ? argsJson.length() : 0,
+				toolContext != null,
+				toolContext != null && toolContext.getContext() != null ? toolContext.getContext().keySet() : "null");
+
+		// 记录工具调用到追踪列表
+		recordToolCall(toolName);
 
 		try {
 			// 从注册表获取工具
@@ -79,12 +93,13 @@ public class ToolRegistryBridge {
 		}
 		catch (Exception e) {
 			logger.error("ToolRegistryBridge#callTool - reason=工具调用失败, toolName=" + toolName, e);
-			String errorResult = "{\"error\": \"" + e.getMessage().replace("\"", "\\\"") + "\"}";
 
 			// 观测错误返回值结构
+			String errorResult = "{\"error\": \"" + e.getMessage().replace("\"", "\\\"") + "\"}";
 			observeReturnSchema(toolName, errorResult, false);
 
-			return errorResult;
+			// 直接抛出异常，让Python层能够捕获并正确处理错误信息
+			throw new RuntimeException(e.getMessage(), e);
 		}
 	}
 
@@ -114,6 +129,46 @@ public class ToolRegistryBridge {
 			logger.warn("ToolRegistryBridge#observeReturnSchema - reason=观测返回值结构失败, toolName={}, error={}", toolName,
 					e.getMessage(), e);
 		}
+	}
+
+	/**
+	 * 记录工具调用。
+	 * @param toolName 工具名称
+	 */
+	private void recordToolCall(String toolName) {
+		// 获取工具的targetClassName来构建完整的工具标识
+		String toolIdentifier = toolName;
+		try {
+			CodeactTool tool = registry.getTool(toolName).orElse(null);
+			if (tool != null && tool.getCodeactMetadata() != null) {
+				String targetClassName = tool.getCodeactMetadata().targetClassName();
+				if (targetClassName != null && !targetClassName.isEmpty()) {
+					toolIdentifier = targetClassName + "." + toolName;
+				}
+			}
+		} catch (Exception e) {
+			logger.warn("ToolRegistryBridge#recordToolCall - reason=获取工具元数据失败, toolName={}", toolName);
+		}
+
+		ToolCallRecord record = new ToolCallRecord(callTrace.size() + 1, toolIdentifier);
+		callTrace.add(record);
+		logger.info("ToolRegistryBridge#recordToolCall - reason=记录工具调用, order={}, tool={}", record.getOrder(), record.getTool());
+	}
+
+	/**
+	 * 获取工具调用追踪记录。
+	 * @return 工具调用记录列表
+	 */
+	public List<ToolCallRecord> getCallTrace() {
+		return new ArrayList<>(callTrace);
+	}
+
+	/**
+	 * 清空工具调用追踪记录。
+	 */
+	public void clearCallTrace() {
+		callTrace.clear();
+		logger.debug("ToolRegistryBridge#clearCallTrace - reason=清空调用追踪记录");
 	}
 
 }

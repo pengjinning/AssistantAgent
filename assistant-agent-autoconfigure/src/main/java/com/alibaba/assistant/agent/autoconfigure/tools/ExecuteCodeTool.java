@@ -17,9 +17,11 @@ package com.alibaba.assistant.agent.autoconfigure.tools;
 
 import com.alibaba.assistant.agent.common.constant.CodeactStateKeys;
 import com.alibaba.assistant.agent.core.context.CodeContext;
+import com.alibaba.assistant.agent.core.executor.CodeactVariableProvider;
 import com.alibaba.assistant.agent.core.executor.GraalCodeExecutor;
 import com.alibaba.assistant.agent.core.model.ExecutionRecord;
 import com.alibaba.assistant.agent.core.model.GeneratedCode;
+import com.alibaba.assistant.agent.core.model.ToolCallRecord;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.agent.tools.ToolContextConstants;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -29,6 +31,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ToolContext;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiFunction;
@@ -44,20 +47,49 @@ public class ExecuteCodeTool implements BiFunction<ExecuteCodeTool.Request, Tool
 
 	private static final Logger logger = LoggerFactory.getLogger(ExecuteCodeTool.class);
 
+	/**
+	 * ToolContext 中用于传递自定义变量的 key
+	 * 自定义变量会在代码执行前注入，作为全局变量可在函数中直接使用
+	 */
+	private static final String CODEACT_CUSTOM_VARIABLES_KEY = "codeact_custom_variables";
+
 	private final GraalCodeExecutor executor;
 	private final CodeContext codeContext;
+	private final CodeactVariableProvider variableProvider;
 
-	public ExecuteCodeTool(GraalCodeExecutor executor, CodeContext codeContext) {
+	/**
+	 * 完整构造函数
+	 *
+	 * @param executor GraalCodeExecutor 实例
+	 * @param codeContext CodeContext 实例
+	 * @param variableProvider 变量提供者（可选，允许为 null）
+	 */
+	public ExecuteCodeTool(GraalCodeExecutor executor, CodeContext codeContext,
+						   CodeactVariableProvider variableProvider) {
 		this.executor = executor;
 		this.codeContext = codeContext;
-		logger.info("ExecuteCodeTool#<init> 初始化完成");
+		this.variableProvider = variableProvider;
+		logger.info("ExecuteCodeTool#<init> 初始化完成, variableProvider={}",
+				variableProvider != null ? variableProvider.getClass().getSimpleName() : "null");
 	}
 
-	// Backward compatibility constructor
+	/**
+	 * 向后兼容构造函数（有 CodeContext，无 Provider）
+	 *
+	 * @param executor GraalCodeExecutor 实例
+	 * @param codeContext CodeContext 实例
+	 */
+	public ExecuteCodeTool(GraalCodeExecutor executor, CodeContext codeContext) {
+		this(executor, codeContext, null);
+	}
+
+	/**
+	 * 向后兼容构造函数（无 CodeContext，无 Provider）
+	 *
+	 * @param executor GraalCodeExecutor 实例
+	 */
 	public ExecuteCodeTool(GraalCodeExecutor executor) {
-		this.executor = executor;
-		this.codeContext = null;
-		logger.info("ExecuteCodeTool#<init> 初始化完成（无CodeContext）");
+		this(executor, null, null);
 	}
 
 	@Override
@@ -111,8 +143,11 @@ public class ExecuteCodeTool implements BiFunction<ExecuteCodeTool.Request, Tool
 				}
 			}
 
-			// Execute code
-			ExecutionRecord record = executor.execute(request.functionName, request.args);
+			// 通过 Provider 获取自定义变量并注入到 ToolContext
+			ToolContext enrichedToolContext = enrichToolContextWithVariables(toolContext, state);
+
+			// Execute code with toolContext for CodeactTools
+			ExecutionRecord record = executor.execute(request.functionName, request.args, toolContext);
 
 			// Update state
 			updateState(state, record);
@@ -120,16 +155,16 @@ public class ExecuteCodeTool implements BiFunction<ExecuteCodeTool.Request, Tool
 			if (record.isSuccess()) {
 				logger.info("ExecuteCodeTool#apply 代码执行成功: functionName={}, result={}",
 					request.functionName, record.getResult());
-				return new Response(true, record.getResult(), null, record.getDurationMs());
+				return new Response(true, record.getResult(), null, record.getCallTrace(), record.getDurationMs());
 			} else {
 				logger.error("ExecuteCodeTool#apply 代码执行失败: functionName={}, error={}",
 					request.functionName, record.getErrorMessage());
-				return new Response(false, null, record.getErrorMessage(), record.getDurationMs());
+				return new Response(false, null, record.getErrorMessage(), record.getCallTrace(), record.getDurationMs());
 			}
 
 		} catch (Exception e) {
 			logger.error("ExecuteCodeTool#apply 代码执行异常", e);
-			return new Response(false, null, "Execution error: " + e.getMessage(), 0);
+			return new Response(false, null, "Execution error: " + e.getMessage(), new ArrayList<>(), 0);
 		}
 	}
 
@@ -151,6 +186,43 @@ public class ExecuteCodeTool implements BiFunction<ExecuteCodeTool.Request, Tool
 		state.updateState(updates);
 
 		logger.debug("ExecuteCodeTool#updateState 执行历史已更新: count={}", history.size());
+	}
+
+	/**
+	 * 通过 Provider 获取变量并注入到 ToolContext
+	 *
+	 * <p>如果没有配置 Provider，直接返回原 Context（向后兼容）。
+	 *
+	 * @param originalContext 原始 ToolContext
+	 * @param state 当前 Agent 状态
+	 * @return 注入了自定义变量的 ToolContext
+	 */
+	private ToolContext enrichToolContextWithVariables(ToolContext originalContext, OverAllState state) {
+		// 如果没有配置 Provider，直接返回原 Context
+		if (variableProvider == null) {
+			logger.debug("ExecuteCodeTool#enrichToolContextWithVariables - reason=无Provider配置, 跳过变量注入");
+			return originalContext;
+		}
+
+		Map<String, Object> enrichedContextMap = new HashMap<>(originalContext.getContext());
+
+		try {
+			// 通过 Provider 获取所有自定义变量
+			Map<String, Object> customVariables = variableProvider.getVariables(state, originalContext);
+
+			if (customVariables != null && !customVariables.isEmpty()) {
+				enrichedContextMap.put(CODEACT_CUSTOM_VARIABLES_KEY, customVariables);
+				logger.info("ExecuteCodeTool#enrichToolContextWithVariables - reason=注入自定义变量, count={}, keys={}",
+						customVariables.size(), customVariables.keySet());
+			} else {
+				logger.debug("ExecuteCodeTool#enrichToolContextWithVariables - reason=Provider返回空变量集");
+			}
+		} catch (Exception e) {
+			logger.warn("ExecuteCodeTool#enrichToolContextWithVariables - reason=从Provider获取变量失败, error={}",
+					e.getMessage(), e);
+		}
+
+		return new ToolContext(enrichedContextMap);
 	}
 
 	/**
@@ -186,18 +258,19 @@ public class ExecuteCodeTool implements BiFunction<ExecuteCodeTool.Request, Tool
 	public static class Response {
 		public boolean success;
 		public String result;
+		public List<ToolCallRecord> callTrace;
 		public String error;
 		public long durationMs;
 
 		public Response() {
 		}
 
-		public Response(boolean success, String result, String error, long durationMs) {
+		public Response(boolean success, String result, String error, List<ToolCallRecord> callTrace, long durationMs) {
 			this.success = success;
 			this.result = result;
+			this.callTrace = callTrace;
 			this.error = error;
 			this.durationMs = durationMs;
 		}
 	}
 }
-

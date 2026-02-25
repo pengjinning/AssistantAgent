@@ -20,6 +20,7 @@ import com.alibaba.assistant.agent.common.tools.CodeExample;
 import com.alibaba.assistant.agent.common.tools.CodeactToolMetadata;
 import com.alibaba.assistant.agent.common.tools.DefaultCodeactToolMetadata;
 import com.alibaba.assistant.agent.common.tools.ReplyCodeactTool;
+import com.alibaba.assistant.agent.common.tools.ToolContextHelper;
 import com.alibaba.assistant.agent.common.tools.definition.CodeactToolDefinition;
 import com.alibaba.assistant.agent.common.tools.definition.DefaultCodeactToolDefinition;
 import com.alibaba.assistant.agent.common.tools.definition.ParameterNode;
@@ -30,6 +31,7 @@ import com.alibaba.assistant.agent.extension.reply.model.ChannelExecutionContext
 import com.alibaba.assistant.agent.extension.reply.model.ParameterSchema;
 import com.alibaba.assistant.agent.extension.reply.model.ReplyResult;
 import com.alibaba.assistant.agent.extension.reply.spi.ReplyChannelDefinition;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,8 +56,10 @@ public class BaseReplyCodeactTool implements ReplyCodeactTool {
 
 	private final String description;
 
+	@JsonIgnore
 	private final ReplyChannelDefinition channel;
 
+	@JsonIgnore
 	private final ReplyToolConfig config;
 
 	private final ParameterSchema parameterSchema;
@@ -66,6 +70,7 @@ public class BaseReplyCodeactTool implements ReplyCodeactTool {
 
 	private final CodeactToolDefinition codeactDefinition;
 
+	@JsonIgnore
 	private final ObjectMapper objectMapper;
 
 	private final ReplyChannelType channelType;
@@ -101,13 +106,14 @@ public class BaseReplyCodeactTool implements ReplyCodeactTool {
 
 	@Override
 	public String call(String toolInput) {
+		log.debug("BaseReplyCodeactTool#call(单参数) - reason=框架调用了单参数版本, toolName={}", toolName);
 		return call(toolInput, null);
 	}
 
 	@Override
 	public String call(String toolInput, ToolContext toolContext) {
-		log.debug("BaseReplyCodeactTool#call - reason=开始执行回复工具, toolName={}, toolInput={}", toolName,
-				toolInput);
+		log.debug("BaseReplyCodeactTool#call - reason=开始执行回复工具, toolName={}, hasToolContext={}",
+				toolName, toolContext != null);
 
 		try {
 			// 解析 JSON 输入参数
@@ -300,6 +306,7 @@ public class BaseReplyCodeactTool implements ReplyCodeactTool {
 			.fewShots(fewShots)
 			.displayName("回复工具")
 			.returnDirect(true)
+			.alwaysAvailable(true)  // 回复工具是基础工具，始终可用
 			.build();
 	}
 
@@ -446,11 +453,36 @@ public class BaseReplyCodeactTool implements ReplyCodeactTool {
 
 	/**
 	 * 构建执行上下文。
+	 * 从 ToolContext 中提取 threadId (即 sessionId)、userId 等信息。
 	 */
 	private ChannelExecutionContext buildExecutionContext(ToolContext toolContext) {
-		// 从 ToolContext 中提取必要的信息构建 ChannelExecutionContext
-		// 这里需要根据实际情况进行适配
-		return new ChannelExecutionContext();
+		log.debug("BaseReplyCodeactTool#buildExecutionContext - reason=开始构建上下文, toolName={}, hasToolContext={}",
+				toolName, toolContext != null);
+
+		ChannelExecutionContext.Builder builder = ChannelExecutionContext.builder()
+				.toolName(toolName)
+				.source(ChannelExecutionContext.ExecutionSource.CODEACT);
+
+		if (toolContext == null) {
+			log.warn("BaseReplyCodeactTool#buildExecutionContext - reason=toolContext为空, toolName={}", toolName);
+			return builder.build();
+		}
+
+		// 从 ToolContext 获取 threadId (即 sessionId)
+		Optional<String> threadIdOpt = ToolContextHelper.getThreadId(toolContext);
+		if (threadIdOpt.isPresent()) {
+			String sessionId = threadIdOpt.get();
+			builder.sessionId(sessionId);
+			log.debug("BaseReplyCodeactTool#buildExecutionContext - reason=获取sessionId成功, sessionId={}", sessionId);
+		} else {
+			log.warn("BaseReplyCodeactTool#buildExecutionContext - reason=未能获取sessionId(threadId), toolName={}", toolName);
+		}
+
+		// 从 metadata 获取 userId 和 traceId
+		ToolContextHelper.getFromMetadata(toolContext, "user_id").ifPresent(builder::userId);
+		ToolContextHelper.getFromMetadata(toolContext, "trace_id").ifPresent(builder::traceId);
+
+		return builder.build();
 	}
 
 }

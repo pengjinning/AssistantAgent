@@ -15,8 +15,11 @@
  */
 package com.alibaba.assistant.agent.evaluation.builder;
 
+import com.alibaba.assistant.agent.evaluation.model.ConditionalExecutionConfig;
+import com.alibaba.assistant.agent.evaluation.model.CriterionBatchingConfig;
 import com.alibaba.assistant.agent.evaluation.model.EvaluationCriterion;
 import com.alibaba.assistant.agent.evaluation.model.EvaluatorType;
+import com.alibaba.assistant.agent.evaluation.model.MultimodalConfig;
 import com.alibaba.assistant.agent.evaluation.model.ReasoningPolicy;
 import com.alibaba.assistant.agent.evaluation.model.ResultType;
 
@@ -124,6 +127,119 @@ public class EvaluationCriterionBuilder {
 	public EvaluationCriterionBuilder contextBindings(List<String> bindings) {
 		criterion.setContextBindings(bindings);
 		return this;
+	}
+
+	/**
+	 * Set the batching configuration for this criterion.
+	 * Enables batch processing of collections with controlled concurrency.
+	 *
+	 * @param config The batching configuration
+	 * @return this builder
+	 */
+	public EvaluationCriterionBuilder batchingConfig(CriterionBatchingConfig config) {
+		criterion.setBatchingConfig(config);
+		return this;
+	}
+
+	/**
+	 * Configure batching for this criterion with all parameters.
+	 *
+	 * @param sourcePath Path to the source collection (e.g., "context.input.toolList")
+	 * @param batchSize Maximum number of items per batch
+	 * @param maxConcurrentBatches Maximum concurrent batches (1 for sequential)
+	 * @param batchBindingKey Key name for binding current batch in context
+	 * @param aggregationStrategy Strategy for aggregating results (e.g., "ANY_TRUE", "ALL_TRUE", "MERGE_LISTS")
+	 * @return this builder
+	 */
+	public EvaluationCriterionBuilder batching(String sourcePath, int batchSize, int maxConcurrentBatches,
+	                                           String batchBindingKey, String aggregationStrategy) {
+		CriterionBatchingConfig config = new CriterionBatchingConfig();
+		config.setEnabled(true);
+		config.setSourcePath(sourcePath);
+		config.setBatchSize(batchSize);
+		config.setMaxConcurrentBatches(maxConcurrentBatches);
+		config.setBatchBindingKey(batchBindingKey);
+		config.setAggregationStrategy(aggregationStrategy);
+		criterion.setBatchingConfig(config);
+		return this;
+	}
+
+	public EvaluationCriterionBuilder conditionalExecution(ConditionalExecutionConfig config) {
+		criterion.setConditionalExecution(config);
+		ensureDependsOn(config.getDependsOnCriterion());
+		return this;
+	}
+
+	/**
+	 * General-purpose conditional execution.
+	 */
+	public EvaluationCriterionBuilder conditionalOn(String dependsOnCriterion,
+	                                                ConditionalExecutionConfig.MatchMode matchMode,
+	                                                Object expectedValue,
+	                                                Object defaultValue,
+	                                                String skipReason) {
+		ConditionalExecutionConfig cfgForMsg = ConditionalExecutionConfig.of(dependsOnCriterion, matchMode, expectedValue);
+		ConditionalExecutionConfig config = cfgForMsg
+			.withDefaultValue(defaultValue)
+			.withSkipReason(skipReason != null ? skipReason : "Condition not met: " + cfgForMsg.getConditionDescription());
+		criterion.setConditionalExecution(config);
+		ensureDependsOn(dependsOnCriterion);
+		return this;
+	}
+
+	/**
+	 * Configure multimodal processing for this criterion.
+	 *
+	 * @param config The multimodal configuration
+	 * @return this builder
+	 */
+	public EvaluationCriterionBuilder multimodal(MultimodalConfig config) {
+		criterion.setMultimodalConfig(config);
+		return this;
+	}
+
+	/**
+	 * Configure multimodal processing for images.
+	 * This is a convenience method that creates a MultimodalConfig for image processing.
+	 *
+	 * @param attachmentsPath Path to the attachments source, e.g., "context.input.attachments".
+	 *                        The path must point to objects implementing the MediaConvertible interface.
+	 * @return this builder
+	 */
+	public EvaluationCriterionBuilder multimodalForImages(String attachmentsPath) {
+		criterion.setMultimodalConfig(MultimodalConfig.forImages(attachmentsPath));
+		return this;
+	}
+
+	/**
+	 * Configure multimodal processing for images with a specific evaluator.
+	 *
+	 * @param attachmentsPath Path to the attachments source
+	 * @param evaluatorRef The evaluator reference to use for multimodal evaluation
+	 * @return this builder
+	 */
+	public EvaluationCriterionBuilder multimodalForImages(String attachmentsPath, String evaluatorRef) {
+		criterion.setMultimodalConfig(MultimodalConfig.forImages(attachmentsPath, evaluatorRef));
+		return this;
+	}
+
+	/**
+	 * Ensure the dependent criterion is in the dependsOn list
+	 */
+	private void ensureDependsOn(String dependsOnCriterion) {
+		if (dependsOnCriterion == null) {
+			return;
+		}
+		List<String> currentDeps = criterion.getDependsOn();
+		if (currentDeps == null) {
+			currentDeps = new ArrayList<>();
+			criterion.setDependsOn(currentDeps);
+		}
+		if (!currentDeps.contains(dependsOnCriterion)) {
+			List<String> newDeps = new ArrayList<>(currentDeps);
+			newDeps.add(dependsOnCriterion);
+			criterion.setDependsOn(newDeps);
+		}
 	}
 
 	public EvaluationCriterion build() {

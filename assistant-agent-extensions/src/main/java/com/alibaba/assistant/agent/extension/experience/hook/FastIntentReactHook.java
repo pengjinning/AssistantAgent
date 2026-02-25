@@ -1,5 +1,6 @@
 package com.alibaba.assistant.agent.extension.experience.hook;
 
+import com.alibaba.assistant.agent.common.constant.HookPriorityConstants;
 import com.alibaba.assistant.agent.extension.experience.config.ExperienceExtensionProperties;
 import com.alibaba.assistant.agent.extension.experience.fastintent.FastIntentContext;
 import com.alibaba.assistant.agent.extension.experience.fastintent.FastIntentService;
@@ -14,6 +15,7 @@ import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.assistant.agent.common.hook.AgentPhase;
 import com.alibaba.assistant.agent.common.hook.HookPhases;
+import com.alibaba.cloud.ai.graph.agent.Prioritized;
 import com.alibaba.cloud.ai.graph.agent.hook.AgentHook;
 import com.alibaba.cloud.ai.graph.agent.hook.HookPosition;
 import com.alibaba.cloud.ai.graph.agent.hook.HookPositions;
@@ -42,11 +44,15 @@ import java.util.concurrent.CompletableFuture;
  * <ul>
  *     <li>追加一个 AssistantMessage(toolCalls=...) 到 messages</li>
  *     <li>设置 jump_to=tool 以跳过本轮 model 调用，直接进入 tool 执行</li>
+ *     <li>设置 fast_intent 状态，后续 Hook（如评估 Hook）可据此跳过</li>
  * </ul>
+ *
+ * <p>优先级：{@link HookPriorityConstants#FAST_INTENT_HOOK}（50），
+ * 确保在评估 Hook 之前执行。
  */
 @HookPhases(AgentPhase.REACT)
 @HookPositions(HookPosition.BEFORE_AGENT)
-public class FastIntentReactHook extends AgentHook {
+public class FastIntentReactHook extends AgentHook implements Prioritized {
 
     private static final Logger log = LoggerFactory.getLogger(FastIntentReactHook.class);
 
@@ -68,8 +74,16 @@ public class FastIntentReactHook extends AgentHook {
     }
 
     @Override
+    public int getOrder() {
+        return HookPriorityConstants.FAST_INTENT_HOOK;
+    }
+
+    @Override
     public List<JumpTo> canJumpTo() {
-        return List.of(JumpTo.tool);
+        // 必须声明所有可能的跳转目标：
+        // - JumpTo.tool: 当快速意图命中时，跳过 model 直接执行 tool
+        // - JumpTo.model: 当没有匹配到经验时，继续正常流程进入 model 调用
+        return List.of(JumpTo.tool, JumpTo.model);
     }
 
     @Override
@@ -121,9 +135,8 @@ public class FastIntentReactHook extends AgentHook {
             Optional<Experience> bestOpt = fastIntentService.selectBestMatch(experiences, ctx);
             if (bestOpt.isEmpty()) {
                 log.debug("FastIntentReactHook#beforeAgent - reason=no matched experience");
-                return CompletableFuture.completedFuture(Map.of(
-                        "jump_to", JumpTo.model
-                ));
+                // 不设置 jump_to，让正常流程继续（否则会导致无限循环到 model）
+                return CompletableFuture.completedFuture(Map.of());
             }
 
             Experience best = bestOpt.get();

@@ -24,6 +24,7 @@ import com.alibaba.assistant.agent.common.tools.definition.DefaultCodeactToolDef
 import com.alibaba.assistant.agent.common.tools.definition.ParameterTree;
 import com.alibaba.assistant.agent.common.tools.definition.ParameterNode;
 import com.alibaba.assistant.agent.common.tools.definition.ParameterType;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -53,6 +54,7 @@ public abstract class AbstractDynamicCodeactTool implements CodeactTool {
 
 	private static final Logger logger = LoggerFactory.getLogger(AbstractDynamicCodeactTool.class);
 
+	@JsonIgnore
 	protected final ObjectMapper objectMapper;
 
 	protected final ToolDefinition toolDefinition;
@@ -236,7 +238,8 @@ public abstract class AbstractDynamicCodeactTool implements CodeactTool {
 		catch (Exception e) {
 			logger.error("AbstractDynamicCodeactTool#call - reason=动态工具调用失败, toolName={}, error={}",
 					toolName, e.getMessage(), e);
-			return buildErrorResponse(e.getMessage());
+			// 直接抛出异常，让上层（ToolRegistryBridge -> Python）能够捕获并正确处理错误信息
+			throw new RuntimeException(e.getMessage(), e);
 		}
 	}
 
