@@ -285,51 +285,51 @@ public class WriteCodeTool implements BiFunction<WriteCodeTool.Request, ToolCont
 	 * <p>注意：此描述应保持通用，不预设具体的工具方法名，具体可用工具由运行时注入的 CodeactTool 决定。
 	 */
 	private static final String WRITE_CODE_DESCRIPTION = """
-		Register a Python function with the specified name and complete code.
+		使用指定的名称和完整代码注册一个 Python 函数。
 		
-		REQUIRED PARAMETERS:
-		- functionName: The exact function name (snake_case format, e.g., 'calculate_sum')
-		- description: Brief description of what the function does
-		- parameters: List of parameter names the function accepts
-		- code: Complete Python function code including 'def' statement and full implementation
+		必需参数：
+		- functionName：函数名称（snake_case 格式，例如 'calculate_sum'）
+		- description：函数功能的简要描述
+		- parameters：函数接受的参数名列表
+		- code：完整的 Python 函数代码，包含 'def' 语句和完整实现
 		
-		CODE WRITING GUIDELINES:
-		1. Function Structure:
-		   - Must start with 'def function_name(params):' matching the functionName parameter
-		   - Include docstring describing the function's purpose
-		   - Handle errors gracefully with try/except blocks
-		   - Return meaningful results as a dictionary
+		代码编写规范：
+		1. 函数结构：
+		   - 必须以 'def function_name(params):' 开头，与 functionName 参数匹配
+		   - 包含描述函数用途的文档字符串
+		   - 使用 try/except 块优雅地处理错误
+		   - 返回有意义的结果，格式为字典
 		
-		2. Pure Computation Functions:
-		   - For simple calculations or data processing, just return the result
-		   - The agent will handle displaying results to the user after execute_code
-		   - Example: return {"success": True, "result": computed_value}
+		2. 纯计算函数：
+		   - 对于简单计算或数据处理，直接返回结果
+		   - Agent 会在 execute_code 执行后处理向用户展示结果
+		   - 示例：return {"success": True, "result": computed_value}
 		
-		3. Tool Usage (when tools are available):
-		   - Tools are injected at runtime as Python objects
-		   - Use 'tool_class.method_name(args)' format to call tools
-		   - Check available tools in the system prompt or guidance before using them
-		   - Common tool classes: search_tools, reply_tools, trigger_tools, etc.
-		   - DO NOT assume specific method names exist - verify first!
+		3. 工具使用（当工具可用时）：
+		   - 工具在运行时作为 Python 对象注入
+		   - 使用 'tool_class.method_name(args)' 格式调用工具
+		   - 使用前先在系统提示或指导中检查可用工具
+		   - 常见工具类：search_tools、reply_tools、trigger_tools 等
+		   - 不要假设特定方法存在，先验证！
 		
-		4. Error Handling:
-		   - Wrap risky operations in try/except blocks
-		   - Return error information when operations fail
-		   - Example: except Exception as e: return {"success": False, "error": str(e)}
+		4. 错误处理：
+		   - 将风险操作包装在 try/except 块中
+		   - 操作失败时返回错误信息
+		   - 示例：except Exception as e: return {"success": False, "error": str(e)}
 		
-		IMPORTANT NOTES:
-		- The code runs in a GraalVM Python sandbox environment
-		- Only use tools that are explicitly available in the current session
-		- When in doubt about available tools, write pure Python code that returns results
-		- The agent can display results to users after code execution
+		重要说明：
+		- 代码在 GraalVM Python 沙箱环境中运行
+		- 只使用当前会话中明确可用的工具
+		- 不确定可用工具时，编写返回结果的纯 Python 代码
+		- Agent 可以在代码执行后向用户展示结果
 		
-		EXAMPLE (Pure Computation):
+		示例（纯计算）：
 		write_code(
 		    functionName='calculate_sum',
-		    description='Calculate the sum of two numbers',
+		    description='计算两个数的和',
 		    parameters=['a', 'b'],
 		    code='''def calculate_sum(a, b):
-		    \"\"\"Calculate the sum of two numbers\"\"\"
+		    \"\"\"计算两个数的和\"\"\"
 		    try:
 		        result = a + b
 		        return {"success": True, "sum": result, "message": f"{a} + {b} = {result}"}
@@ -366,19 +366,19 @@ public class WriteCodeTool implements BiFunction<WriteCodeTool.Request, ToolCont
 	 */
 	public static class Request {
 		@JsonProperty(required = true)
-		@JsonPropertyDescription("The exact name of the function to register (snake_case format)")
+		@JsonPropertyDescription("要注册的函数名称（snake_case 格式）")
 		public String functionName;
 
 		@JsonProperty(required = true)
-		@JsonPropertyDescription("Description of what the function does")
+		@JsonPropertyDescription("函数功能的描述")
 		public String description;
 
 		@JsonProperty
-		@JsonPropertyDescription("List of parameter names the function accepts")
+		@JsonPropertyDescription("函数接受的参数名列表")
 		public List<String> parameters;
 
 		@JsonProperty(required = true)
-		@JsonPropertyDescription("Complete Python function code, including 'def' statement and implementation")
+		@JsonPropertyDescription("完整的 Python 函数代码，包含 'def' 语句和实现")
 		public String code;
 
 		public Request() {

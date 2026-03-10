@@ -252,49 +252,49 @@ public class WriteConditionCodeTool implements BiFunction<WriteConditionCodeTool
 	 * <p>包含条件函数编写规范和指导，帮助 LLM 生成正确的条件判断代码。
 	 */
 	private static final String WRITE_CONDITION_CODE_DESCRIPTION = """
-		Register a condition check function for triggers. The function MUST return a boolean value (True/False).
+		为触发器注册一个条件检查函数。函数必须返回布尔值（True/False）。
 		
-		REQUIRED PARAMETERS:
-		- functionName: The exact function name (should start with 'check_' or 'condition_')
-		- code: Complete Python function code that returns True or False
-		- parameters: List of parameter names (optional, can be empty for timer-based conditions)
-		- description: Natural language description of what condition this function checks
+		必需参数：
+		- functionName：函数名称（应以 'check_' 或 'condition_' 开头）
+		- code：返回 True 或 False 的完整 Python 函数代码
+		- parameters：参数名列表（可选，定时触发器可为空）
+		- description：描述该函数检查什么条件的自然语言描述
 		
-		CONDITION FUNCTION GUIDELINES:
-		1. Return Type:
-		   - MUST return True or False (boolean)
-		   - True means condition is met, trigger action will execute
-		   - False means condition is not met, no action
+		条件函数编写规范：
+		1. 返回类型：
+		   - 必须返回 True 或 False（布尔值）
+		   - True 表示条件满足，触发器动作将执行
+		   - False 表示条件不满足，不执行动作
 		
-		2. For Timer/Delay-based Triggers:
-		   - Condition function can simply return True
-		   - Actual timing is controlled by subscribe_trigger's delay/cron parameter
-		   - Example: def check_reminder_condition(): return True
+		2. 定时/延迟触发器：
+		   - 条件函数可以简单返回 True
+		   - 实际时间控制由 subscribe_trigger 的 delay/cron 参数控制
+		   - 示例：def check_reminder_condition(): return True
 		
-		3. For Event-based Triggers:
-		   - Check actual conditions (e.g., data changes, thresholds)
-		   - Example: def check_quota_exceeded(current, limit): return current > limit
+		3. 事件触发器：
+		   - 检查实际条件（如数据变化、阈值）
+		   - 示例：def check_quota_exceeded(current, limit): return current > limit
 		
-		4. Error Handling:
-		   - Return False if any error occurs (fail-safe)
-		   - Don't raise exceptions in condition functions
+		4. 错误处理：
+		   - 发生任何错误时返回 False（故障安全）
+		   - 不要在条件函数中抛出异常
 		
-		EXAMPLES:
+		示例：
 		
-		1. Timer-based (always True, timing via delay):
+		1. 定时触发器（始终为 True，通过 delay 控制时间）：
 		   write_condition_code(
 		       functionName='check_medicine_reminder',
 		       code='def check_medicine_reminder():\\n    return True',
 		       parameters=[],
-		       description='Timer condition for medicine reminder'
+		       description='吃药提醒的定时条件'
 		   )
 		
-		2. Event-based (actual condition check):
+		2. 事件触发器（实际条件检查）：
 		   write_condition_code(
 		       functionName='check_is_working_day',
 		       code='def check_is_working_day(date):\\n    return date.weekday() < 5',
 		       parameters=['date'],
-		       description='Check if the given date is a working day'
+		       description='检查给定日期是否为工作日'
 		   )
 		""";
 
@@ -331,19 +331,19 @@ public class WriteConditionCodeTool implements BiFunction<WriteConditionCodeTool
 	 */
 	public static class Request {
 		@JsonProperty(required = true)
-		@JsonPropertyDescription("Function name for the condition check (should start with 'check_' or 'condition_')")
+		@JsonPropertyDescription("条件检查函数的名称（应以 'check_' 或 'condition_' 开头）")
 		public String functionName;
 
 		@JsonProperty(required = true)
-		@JsonPropertyDescription("Complete Python code that defines the condition function. Must return True or False.")
+		@JsonPropertyDescription("定义条件函数的完整 Python 代码。必须返回 True 或 False。")
 		public String code;
 
 		@JsonProperty
-		@JsonPropertyDescription("List of parameter names the condition function needs")
+		@JsonPropertyDescription("条件函数需要的参数名列表")
 		public List<String> parameters;
 
 		@JsonProperty
-		@JsonPropertyDescription("Natural language description of what condition this function checks")
+		@JsonPropertyDescription("描述该函数检查什么条件的自然语言描述")
 		public String description;
 
 		public Request() {
