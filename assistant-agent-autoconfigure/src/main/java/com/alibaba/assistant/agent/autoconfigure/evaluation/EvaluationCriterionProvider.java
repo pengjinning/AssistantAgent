@@ -23,15 +23,17 @@ import java.util.List;
 /**
  * 评估 Criterion 提供者接口
  *
- * <p>实现此接口可以向 react-phase-suite 和 codeact-phase-suite 添加自定义 Criterion。
+ * <p>实现此接口可以向默认评估套件添加自定义 Criterion。
  * 这是一个模板模式的接口，Example 层只需实现此接口提供 Criterion 定义即可。
+ * 
+ * <p>4.1 重构后：取消了 Codeact 阶段的 LLM 调用，只保留一个统一的评估套件。
  *
  * <p>使用方式：
  * <pre>
  * &#64;Component
  * public class MyCustomCriterionProvider implements EvaluationCriterionProvider {
  *     &#64;Override
- *     public List&lt;EvaluationCriterion&gt; getReactPhaseCriteria() {
+ *     public List&lt;EvaluationCriterion&gt; getCriteria() {
  *         return List.of(
  *             EvaluationCriterionBuilder.create("my_criterion")
  *                 .description("My custom criterion")
@@ -49,19 +51,26 @@ import java.util.List;
 public interface EvaluationCriterionProvider {
 
     /**
-     * 获取 React 阶段的自定义 Criterion 列表
+     * 获取自定义 Criterion 列表
      *
      * @return Criterion 列表，返回空列表表示不添加
      */
-    default List<EvaluationCriterion> getReactPhaseCriteria() {
+    default List<EvaluationCriterion> getCriteria() {
         return Collections.emptyList();
     }
 
     /**
-     * 获取 CodeAct 阶段的自定义 Criterion 列表
-     *
-     * @return Criterion 列表，返回空列表表示不添加
+     * @deprecated 4.1 重构后不再区分阶段，使用 {@link #getCriteria()} 代替
      */
+    @Deprecated
+    default List<EvaluationCriterion> getReactPhaseCriteria() {
+        return getCriteria();
+    }
+
+    /**
+     * @deprecated 4.1 重构后不再有 CodeAct 阶段，使用 {@link #getCriteria()} 代替
+     */
+    @Deprecated
     default List<EvaluationCriterion> getCodeActPhaseCriteria() {
         return Collections.emptyList();
     }

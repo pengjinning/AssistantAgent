@@ -49,6 +49,8 @@ import java.util.stream.Collectors;
  *
  * <p>Starter 层通过此工厂创建评估器并自动注册。
  * Example 层只需提供经验数据。
+ * 
+ * <p>4.1 重构后：取消了 Codeact 阶段的 LLM 调用，只保留一个统一的经验检索评估器。
  *
  * @author Assistant Agent Team
  * @since 1.0.0
@@ -58,43 +60,43 @@ public class ExperienceRetrievalEvaluatorFactory {
     private static final Logger log = LoggerFactory.getLogger(ExperienceRetrievalEvaluatorFactory.class);
 
     /**
-     * 创建 React 阶段经验检索评估器
+     * 创建经验检索评估器
      * 检索 COMMON + REACT 类型的经验
      *
      * @param experienceProvider 经验提供者
      * @param maxExperiencesPerType 每种类型最多检索的数量
      * @return 规则评估器
      */
-    public static RuleBasedEvaluator createReactPhaseEvaluator(
+    public static RuleBasedEvaluator createExperienceEvaluator(
             ExperienceProvider experienceProvider,
             int maxExperiencesPerType) {
         return createEvaluator(
                 experienceProvider,
-                "react_experience_evaluator",
+                "experience-retrieval",
                 List.of(ExperienceType.COMMON, ExperienceType.REACT),
                 maxExperiencesPerType,
-                "React阶段"
+                "经验参考"
         );
     }
 
     /**
-     * 创建 CodeAct 阶段经验检索评估器
-     * 检索 COMMON + CODE 类型的经验
-     *
-     * @param experienceProvider 经验提供者
-     * @param maxExperiencesPerType 每种类型最多检索的数量
-     * @return 规则评估器
+     * @deprecated 4.1 重构后不再区分阶段，使用 {@link #createExperienceEvaluator} 代替
      */
+    @Deprecated
+    public static RuleBasedEvaluator createReactPhaseEvaluator(
+            ExperienceProvider experienceProvider,
+            int maxExperiencesPerType) {
+        return createExperienceEvaluator(experienceProvider, maxExperiencesPerType);
+    }
+
+    /**
+     * @deprecated 4.1 重构后不再有 CodeAct 阶段
+     */
+    @Deprecated
     public static RuleBasedEvaluator createCodeActPhaseEvaluator(
             ExperienceProvider experienceProvider,
             int maxExperiencesPerType) {
-        return createEvaluator(
-                experienceProvider,
-                "codeact_experience_evaluator",
-                List.of(ExperienceType.COMMON, ExperienceType.CODE),
-                maxExperiencesPerType,
-                "CodeAct阶段"
-        );
+        return createExperienceEvaluator(experienceProvider, maxExperiencesPerType);
     }
 
     /**

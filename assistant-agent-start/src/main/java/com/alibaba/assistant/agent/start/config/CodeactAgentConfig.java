@@ -16,8 +16,6 @@
 package com.alibaba.assistant.agent.start.config;
 
 import com.alibaba.assistant.agent.autoconfigure.CodeactAgent;
-import com.alibaba.assistant.agent.common.hook.AgentPhase;
-import com.alibaba.assistant.agent.common.hook.HookPhaseUtils;
 import com.alibaba.assistant.agent.common.tools.CodeactTool;
 import com.alibaba.assistant.agent.common.tools.ReplyCodeactTool;
 import com.alibaba.assistant.agent.common.tools.SearchCodeactTool;
@@ -43,7 +41,6 @@ import org.springframework.context.annotation.Configuration;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Codeact Agent 配置类
@@ -226,18 +223,17 @@ public class CodeactAgentConfig {
 
 
 	/**
-	 * 注入所有 Hook Bean，通过 @HookPhases 注解自动分类到不同阶段
+	 * 注入所有 Hook Bean
 	 * 
 	 * <p>Spring 会自动收集所有实现了 Hook 接口的 Bean，包括：
 	 * <ul>
-	 *   <li>评估模块 Hooks（ReactBeforeModelEvaluationHook, CodeactBeforeModelEvaluationHook 等）</li>
-	 *   <li>Prompt 贡献者 Hooks（ReactPromptContributorModelHook, CodeactPromptContributorModelHook 等）</li>
+	 *   <li>评估模块 Hooks（AgentInputEvaluationHook, ReactBeforeModelEvaluationHook 等）</li>
+	 *   <li>Prompt 贡献者 Hooks（ReactPromptContributorModelHook 等）</li>
 	 *   <li>学习模块 Hook（AfterAgentLearningHook）</li>
 	 *   <li>快速意图 Hook（FastIntentReactHook）</li>
 	 * </ul>
 	 * 
-	 * <p>每个 Hook 通过 @HookPhases 注解声明自己适用的阶段，
-	 * 在构建 Agent 时使用 HookPhaseUtils.groupByPhase() 自动分类。
+	 * <p>4.1 重构后取消了 Codeact 阶段的 LLM 调用，所有 Hooks 统一应用于 React 阶段。
 	 */
 	@Autowired(required = false)
 	private List<Hook> allHooks;
@@ -337,44 +333,26 @@ public class CodeactAgentConfig {
 
 
         /*---------------------准备hooks-------------------*/
-        // 使用 HookPhaseUtils.groupByPhase() 根据 @HookPhases 注解自动分类
-        // 这样 Hook 的阶段由注解自己声明，而不是配置类手动指定
-        Map<AgentPhase, List<Hook>> hooksByPhase = HookPhaseUtils.groupByPhase(allHooks);
-        List<Hook> reactHooks = hooksByPhase.get(AgentPhase.REACT);
-        List<Hook> codeactHooks = hooksByPhase.get(AgentPhase.CODEACT);
-
-        logger.info("CodeactAgentConfig#grayscaleCodeactAgent - reason=按 @HookPhases 注解自动分类 Hooks, " +
-                "total={}, reactPhase={}, codeactPhase={}",
-                allHooks != null ? allHooks.size() : 0,
-                reactHooks.size(),
-                codeactHooks.size());
-
-        // 打印各阶段 Hook 详情（调试用）
-        if (logger.isDebugEnabled()) {
-            HookPhaseUtils.logHookPhases(allHooks);
-        }
+        logger.info("CodeactAgentConfig#grayscaleCodeactAgent - reason=统一配置 Hooks, total={}",
+                allHooks != null ? allHooks.size() : 0);
 
 		CodeactAgent.CodeactAgentBuilder builder = CodeactAgent.builder()
 				.name("CodeactAgent")
 				.description("A code-driven agent that solves problems by writing and executing Python code")
 				.systemPrompt(SYSTEM_PROMPT)   // 系统角色定义（SystemMessage）
 				.model(chatModel)
-                .codingChatModel(chatModel)
 				.language(Language.PYTHON)     // CodeactAgentBuilder特有方法
-				// 使用 qwen-coder-plus 模型进行代码生成
-				.codeGenerationModelName("qwen3-coder-plus")
 				.enableInitialCodeGen(true)
 				.allowIO(false)
 				.allowNativeAccess(false)
 				.executionTimeout(30000)
                 .tools(replyCodeactTools != null ? replyCodeactTools.toArray(new ToolCallback[0]) : new ToolCallback[0])
                 .codeactTools(allCodeactTools)
-                .hooks(reactHooks)
-                .subAgentHooks(codeactHooks)
+                .hooks(allHooks)  // 4.1 重构：所有 Hooks 统一应用于 React 阶段
 				.experienceProvider(experienceProvider)
 				.experienceExtensionProperties(experienceExtensionProperties)
 				.fastIntentService(fastIntentService)
-				.saver(new MemorySaver()); // 🔥 添加 MemorySaver 支持多轮对话上下文保持（放在最后）
+				.saver(new MemorySaver()); // 添加 MemorySaver 支持多轮对话上下文保持
 		return builder.build();
 	}
 

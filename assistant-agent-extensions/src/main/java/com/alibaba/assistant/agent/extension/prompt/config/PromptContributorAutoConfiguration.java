@@ -15,7 +15,6 @@
  */
 package com.alibaba.assistant.agent.extension.prompt.config;
 
-import com.alibaba.assistant.agent.extension.prompt.CodeactPromptContributorModelHook;
 import com.alibaba.assistant.agent.extension.prompt.ReactPromptContributorModelHook;
 import com.alibaba.assistant.agent.prompt.DefaultPromptContributorManager;
 import com.alibaba.assistant.agent.prompt.PromptContributor;
@@ -31,10 +30,9 @@ import java.util.List;
 
 /**
  * Prompt Contributor 自动配置类
- * 负责创建 PromptContributorManager 和各阶段的 PromptContributorModelHook
+ * 负责创建 PromptContributorManager 和 PromptContributorModelHook
  * 
- * <p>各阶段的 Hook 通过 {@code @HookPhases} 注解声明适用阶段，
- * 在 Agent 注册时由 {@code HookPhaseUtils} 自动过滤到正确的阶段。
+ * <p>4.1 重构后：取消了 Codeact 阶段的 LLM 调用，所有 Hooks 统一应用于 React 阶段。
  *
  * @author Assistant Agent Team
  */
@@ -56,29 +54,15 @@ public class PromptContributorAutoConfiguration {
     }
 
     /**
-     * 为 REACT 阶段提供 PromptContributorModelHook
+     * 提供 PromptContributorModelHook
      * 
-     * <p>通过 {@code @HookPhases(AgentPhase.REACT)} 注解声明，
-     * 会被 HookPhaseUtils 自动分配到 React Agent。
+     * <p>4.1 重构后：取消了 Codeact 阶段的 LLM 调用，统一使用 React 阶段的 Hook。
      */
     @Bean
     @ConditionalOnProperty(prefix = "spring.ai.alibaba.codeact.extension.prompt.react", name = "enabled", havingValue = "true")
-    public ReactPromptContributorModelHook reactPromptContributorModelHook(PromptContributorManager manager) {
-        log.info("PromptContributorAutoConfiguration#reactPromptContributorModelHook - reason=创建 REACT 阶段的 PromptContributorModelHook");
+    public ReactPromptContributorModelHook promptContributorModelHook(PromptContributorManager manager) {
+        log.info("PromptContributorAutoConfiguration#promptContributorModelHook - reason=创建 PromptContributorModelHook");
         return new ReactPromptContributorModelHook(manager);
-    }
-
-    /**
-     * 为 CODEACT 阶段提供 PromptContributorModelHook
-     * 
-     * <p>通过 {@code @HookPhases(AgentPhase.CODEACT)} 注解声明，
-     * 会被 HookPhaseUtils 自动分配到 CodeAct Agent。
-     */
-    @Bean
-    @ConditionalOnProperty(prefix = "spring.ai.alibaba.codeact.extension.prompt.codeact", name = "enabled", havingValue = "true")
-    public CodeactPromptContributorModelHook codeactPromptContributorModelHook(PromptContributorManager manager) {
-        log.info("PromptContributorAutoConfiguration#codeactPromptContributorModelHook - reason=创建 CODEACT 阶段的 PromptContributorModelHook");
-        return new CodeactPromptContributorModelHook(manager);
     }
 }
 

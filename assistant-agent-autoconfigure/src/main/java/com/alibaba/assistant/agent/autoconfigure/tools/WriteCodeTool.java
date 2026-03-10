@@ -19,7 +19,6 @@ import com.alibaba.assistant.agent.core.context.CodeContext;
 import com.alibaba.assistant.agent.core.context.SessionCodeManager;
 import com.alibaba.assistant.agent.core.executor.RuntimeEnvironmentManager;
 import com.alibaba.assistant.agent.core.model.GeneratedCode;
-import com.alibaba.assistant.agent.autoconfigure.subagent.BaseAgentTaskTool;
 import com.alibaba.assistant.agent.extension.experience.fastintent.CodeFastIntentSupport;
 import com.alibaba.assistant.agent.extension.experience.model.Experience;
 import com.alibaba.assistant.agent.extension.experience.model.FastIntentConfig;
@@ -36,7 +35,6 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -44,13 +42,20 @@ import java.util.Optional;
 import java.util.function.BiFunction;
 
 /**
- * WriteCodeTool - 代码生成工具（委托给 BaseAgentTaskTool）
+ * WriteCodeTool - 代码注册工具
  *
- * <p>职责：
+ * <p>职责（4.1 重构后）：
  * <ul>
- * <li>参数适配：将 WriteCodeRequest 转换为 TaskRequest</li>
- * <li>委托调用：通过 BaseAgentTaskTool 调用 code-generator 子 Agent</li>
- * <li>额外处理：注册到 CodeContext 和持久化到 Store</li>
+ * <li>接收 LLM 在 React 阶段直接生成的完整 Python 代码</li>
+ * <li>验证代码格式（函数名、参数是否匹配）</li>
+ * <li>将代码注入到 CodeContext，供后续 execute_code 调用</li>
+ * </ul>
+ *
+ * <p>改造说明：
+ * <ul>
+ * <li>取消了对 CodeGeneratorSubAgent 的委托调用</li>
+ * <li>新增 code 参数，直接接收完整的 Python 函数代码</li>
+ * <li>保留 FastIntent 快速匹配能力</li>
  * </ul>
  *
  * @author Assistant Agent Team
@@ -60,75 +65,61 @@ public class WriteCodeTool implements BiFunction<WriteCodeTool.Request, ToolCont
 
 	private static final Logger logger = LoggerFactory.getLogger(WriteCodeTool.class);
 
-	private final BaseAgentTaskTool taskTool;
 	private final CodeContext codeContext;
 	private final RuntimeEnvironmentManager environmentManager;
 
-	// fast-intent (optional)
 	private final CodeFastIntentSupport codeFastIntentSupport;
 
-	public WriteCodeTool(BaseAgentTaskTool taskTool,
-						 CodeContext codeContext,
+	public WriteCodeTool(CodeContext codeContext,
 						 RuntimeEnvironmentManager environmentManager,
 						 CodeFastIntentSupport codeFastIntentSupport) {
-		this.taskTool = taskTool;
 		this.codeContext = codeContext;
 		this.environmentManager = environmentManager;
 		this.codeFastIntentSupport = codeFastIntentSupport;
 	}
 
-	// Backward compatibility constructor
-	public WriteCodeTool(BaseAgentTaskTool taskTool, CodeContext codeContext, RuntimeEnvironmentManager environmentManager) {
-		this(taskTool, codeContext, environmentManager, null);
+	public WriteCodeTool(CodeContext codeContext, RuntimeEnvironmentManager environmentManager) {
+		this(codeContext, environmentManager, null);
 	}
 
 	@Override
 	public String apply(Request request, ToolContext toolContext) {
-		logger.info("WriteCodeTool#apply 调用代码生成子Agent: functionName={}", request.functionName);
+		logger.info("WriteCodeTool#apply 注册代码: functionName={}", request.functionName);
 
 		try {
-			// 0. FastPath Intent (CODE): hit => skip code-generator
+			// 0. FastPath Intent (CODE): hit => skip code validation
 			String fastIntentResult = tryFastIntent(request, toolContext);
 			if (fastIntentResult != null) {
 				return fastIntentResult;
 			}
 
-			// 1. 参数适配：构建结构化输入
-			Map<String, Object> structuredInputs = new HashMap<>();
-			structuredInputs.put("requirement", request.requirement);
-			structuredInputs.put("function_name", request.functionName);
-			structuredInputs.put("parameters", request.parameters != null ? request.parameters : new ArrayList<>());
-
-			// 添加历史代码（合并全局和session维度）
-			List<String> historyCode = getHistoryCode(toolContext);
-			structuredInputs.put("history_code", historyCode);
-
-			String taskDescription = buildTaskDescription(request);
-			BaseAgentTaskTool.TaskRequest taskRequest = new BaseAgentTaskTool.TaskRequest(
-					taskDescription,
-					"code-generator",
-					structuredInputs
-			);
-
-			logger.debug("WriteCodeTool#apply 构建结构化输入: requirement={}, function_name={}, parameters={}, historyCodeCount={}",
-					request.requirement, request.functionName, request.parameters, historyCode.size());
-
-			// 2. 委托给 TaskTool 调用子 Agent
-			String generatedCode = taskTool.apply(taskRequest, toolContext);
-
-			// 3. 检查错误
-			if (generatedCode.startsWith("Error:")) {
-				return generatedCode;
+			// 1. 验证必填参数
+			if (request.functionName == null || request.functionName.trim().isEmpty()) {
+				return "Error: functionName is required";
+			}
+			if (request.code == null || request.code.trim().isEmpty()) {
+				return "Error: code is required. Please provide the complete Python function code.";
 			}
 
-			// 4. 额外处理：注册到 CodeContext
-			registerCode(request, generatedCode, toolContext);
+			// 2. 清理代码（移除可能的 markdown 标记）
+			String cleanedCode = cleanUpCode(request.code);
 
-			logger.info("WriteCodeTool#apply 代码生成成功: functionName={}", request.functionName);
-			return "Code generated successfully: " + request.functionName+ "\n```python\n" + generatedCode + "\n```";
+			// 3. 验证代码格式
+			String validationError = validateCode(request.functionName, request.parameters, cleanedCode);
+			if (validationError != null) {
+				logger.warn("WriteCodeTool#apply 代码验证失败: {}", validationError);
+				return "Error: " + validationError;
+			}
+
+			// 4. 注册代码到 CodeContext
+			registerCode(request, cleanedCode, toolContext);
+
+			logger.info("WriteCodeTool#apply 代码注册成功: functionName={}", request.functionName);
+			return String.format("函数 %s 已成功注册，可以通过 execute_code 执行。\n```python\n%s\n```",
+					request.functionName, cleanedCode);
 
 		} catch (Exception e) {
-			logger.error("WriteCodeTool#apply 代码生成失败", e);
+			logger.error("WriteCodeTool#apply 代码注册失败", e);
 			return "Error: " + e.getMessage();
 		}
 	}
@@ -141,7 +132,7 @@ public class WriteCodeTool implements BiFunction<WriteCodeTool.Request, ToolCont
 			}
 
 			String language = (codeContext != null && codeContext.getLanguage() != null) ? codeContext.getLanguage().name() : null;
-			Map<String, Object> toolReq = CodeFastIntentSupport.toolReqOf(request.requirement, request.functionName, request.parameters);
+			Map<String, Object> toolReq = CodeFastIntentSupport.toolReqOf(request.description, request.functionName, request.parameters);
 			Optional<CodeFastIntentSupport.Hit> hitOpt = codeFastIntentSupport.tryHit(toolContext, toolReq, language);
 			if (hitOpt.isEmpty()) {
 				return null;
@@ -160,7 +151,7 @@ public class WriteCodeTool implements BiFunction<WriteCodeTool.Request, ToolCont
 				if (fb == FastIntentConfig.FastIntentFallback.FAIL_FAST) {
 					return "Error: FastIntent(Code) register failed: " + err;
 				}
-				return null; // fallback to normal LLM path
+				return null;
 			}
 
 			logger.info("WriteCodeTool#tryFastIntent - reason=fast-intent HIT (skip codegen), expId={}", best.getId());
@@ -173,62 +164,69 @@ public class WriteCodeTool implements BiFunction<WriteCodeTool.Request, ToolCont
 	}
 
 	/**
-	 * 构建任务描述
+	 * 清理代码（移除 markdown 代码块标记）
 	 */
-	private String buildTaskDescription(Request request) {
-		StringBuilder desc = new StringBuilder();
-		desc.append("需求: ").append(request.requirement).append("\n");
-		desc.append("函数名: ").append(request.functionName).append("\n");
-
-		if (request.parameters != null && !request.parameters.isEmpty()) {
-			desc.append("参数列表: ").append(String.join(", ", request.parameters)).append("\n");
-		} else {
-			desc.append("参数: 使用 **kwargs 接收灵活参数\n");
+	private String cleanUpCode(String code) {
+		if (code == null) {
+			return null;
 		}
+		String cleaned = code.trim();
+		if (cleaned.startsWith("```python")) {
+			cleaned = cleaned.substring(9);
+		} else if (cleaned.startsWith("```py")) {
+			cleaned = cleaned.substring(5);
+		} else if (cleaned.startsWith("```")) {
+			cleaned = cleaned.substring(3);
+		}
+		if (cleaned.endsWith("```")) {
+			cleaned = cleaned.substring(0, cleaned.length() - 3);
+		}
+		return cleaned.trim();
+	}
 
-		return desc.toString();
+	/**
+	 * 验证代码格式
+	 *
+	 * @param expectedFunctionName 期望的函数名
+	 * @param expectedParameters 期望的参数列表
+	 * @param code 代码内容
+	 * @return 错误信息，如果验证通过返回 null
+	 */
+	private String validateCode(String expectedFunctionName, List<String> expectedParameters, String code) {
+		String actualFunctionName = environmentManager.extractFunctionName(code);
+		if (actualFunctionName == null) {
+			return "Code does not contain a valid function definition. Expected: def " + expectedFunctionName + "(...)";
+		}
+		if (!actualFunctionName.equals(expectedFunctionName)) {
+			return String.format("Function name mismatch. Expected: %s, Actual: %s",
+					expectedFunctionName, actualFunctionName);
+		}
+		return null;
 	}
 
 	/**
 	 * 注册代码到 Session状态 和 Store
-	 *
-	 * <p>代码会被保存到OverAllState的session级别存储中，而不是全局共享的CodeContext，
-	 * 这样不同session的代码不会相互干扰。
 	 */
-	private void registerCode(Request request, String generatedCode, ToolContext toolContext) {
-		// 验证函数名
-		String actualFunctionName = environmentManager.extractFunctionName(generatedCode);
-		if (actualFunctionName != null && !actualFunctionName.equals(request.functionName)) {
-			logger.warn("WriteCodeTool#registerCode - reason=生成的函数名不匹配, expected={}, actual={}",
-					request.functionName, actualFunctionName);
-		}
-
-		// 创建 GeneratedCode 对象
-		GeneratedCode code = new GeneratedCode(
+	private void registerCode(Request request, String code, ToolContext toolContext) {
+		GeneratedCode generatedCode = new GeneratedCode(
 				request.functionName,
 				codeContext.getLanguage(),
-				generatedCode,
-				request.requirement
+				code,
+				request.description != null ? request.description : ""
 		);
-		code.setParameters(request.parameters != null ? new ArrayList<>(request.parameters) : new ArrayList<>());
+		generatedCode.setParameters(request.parameters != null ? new ArrayList<>(request.parameters) : new ArrayList<>());
 
-		// 获取 OverAllState
 		OverAllState state = getOverAllState(toolContext);
 
-		// 注册到 Session 级别存储（优先）
 		if (state != null) {
-			SessionCodeManager.registerSessionFunction(state, code);
+			SessionCodeManager.registerSessionFunction(state, generatedCode);
 			logger.info("WriteCodeTool#registerCode - reason=代码已注册到session, functionName={}",
 					request.functionName);
 		} else {
-			// 降级：如果无法获取state，仍然注册到共享的CodeContext
-			codeContext.registerFunction(code);
+			codeContext.registerFunction(generatedCode);
 			logger.warn("WriteCodeTool#registerCode - reason=无法获取state降级到全局CodeContext, functionName={}",
 					request.functionName);
 		}
-
-		// 持久化到 Store（用于跨session的长期存储，默认暂时为空不做任何操作）
-		// saveToStore(toolContext, code);
 	}
 
 	/**
@@ -248,6 +246,7 @@ public class WriteCodeTool implements BiFunction<WriteCodeTool.Request, ToolCont
 	/**
 	 * 保存到 Store
 	 */
+	@SuppressWarnings("unused")
 	private void saveToStore(ToolContext toolContext, GeneratedCode code) {
 		try {
 			OverAllState state = (OverAllState) toolContext.getContext()
@@ -281,55 +280,91 @@ public class WriteCodeTool implements BiFunction<WriteCodeTool.Request, ToolCont
 	}
 
 	/**
-	 * 获取历史生成的代码（合并全局和session维度）
-	 *
-	 * <p>使用SessionCodeManager获取合并后的代码，session维度的代码优先级高于全局代码。
-	 *
-	 * @param toolContext 工具上下文（用于获取session状态）
-	 * @return 历史代码列表
+	 * write_code 工具的详细描述
+	 * 
+	 * <p>包含代码编写规范和指导，帮助 LLM 生成正确的代码。
+	 * 这些内容源自原 CodeGeneratorNode 的 buildSystemPrompt 方法。
 	 */
-	private List<String> getHistoryCode(ToolContext toolContext) {
-		List<String> historyCode = new ArrayList<>();
-
-		OverAllState state = getOverAllState(toolContext);
-
-		// 使用SessionCodeManager获取合并后的代码
-		Collection<GeneratedCode> mergedFunctions = SessionCodeManager.getMergedFunctions(state, codeContext);
-		for (GeneratedCode code : mergedFunctions) {
-			historyCode.add(code.getCode());
-		}
-
-		logger.debug("WriteCodeTool#getHistoryCode - reason=获取历史代码, totalCount={}, sessionCount={}",
-				historyCode.size(), SessionCodeManager.getSessionFunctionCount(state));
-
-		return historyCode;
-	}
+	private static final String WRITE_CODE_DESCRIPTION = """
+		Register a Python function with the specified name and complete code.
+		
+		REQUIRED PARAMETERS:
+		- functionName: The exact function name (snake_case format, e.g., 'query_app_info')
+		- description: Brief description of what the function does
+		- parameters: List of parameter names the function accepts
+		- code: Complete Python function code including 'def' statement and full implementation
+		
+		CODE WRITING GUIDELINES:
+		1. Function Structure:
+		   - Must start with 'def function_name(params):' matching the functionName parameter
+		   - Include docstring describing the function's purpose
+		   - Handle errors gracefully with try/except blocks
+		   - Return meaningful results or call reply tools to respond to user
+		
+		2. Available Context Variables (pre-injected, use directly without defining):
+		   - input_text: User's original input text
+		   - user_id: Current user ID
+		   - tenant_id: Tenant ID
+		   - session_id: Session ID
+		   - attachments: List of attachments
+		
+		3. Tool Usage in Code:
+		   - Use 'tool_class.method_name(args)' format to call tools
+		   - Available tool classes: search_tools, reply_tools, aone_api_tools, llm_tools, etc.
+		   - Example: search_tools.search("keyword") or reply_tools.send_message("response")
+		
+		4. Reply Strategy:
+		   - IMPORTANT: Include reply logic in code (e.g., reply_tools.send_message())
+		   - Complete the full workflow: fetch data -> process -> reply to user
+		   - Don't just return data, make sure to notify the user of results
+		
+		5. Error Handling:
+		   - Wrap API calls in try/except blocks
+		   - Return error information when operations fail
+		   - Example: except Exception as e: return {"error": str(e)}
+		
+		EXAMPLE:
+		write_code(
+		    functionName='search_and_reply',
+		    description='Search for information and reply to user',
+		    parameters=['query'],
+		    code='''def search_and_reply(query):
+		    \"\"\"Search for information and reply to user\"\"\"
+		    try:
+		        results = search_tools.search(query)
+		        if results:
+		            reply_tools.send_message(f"Found: {results}")
+		            return {"success": True, "results": results}
+		        else:
+		            reply_tools.send_message("No results found")
+		            return {"success": False, "message": "No results"}
+		    except Exception as e:
+		        reply_tools.send_message(f"Search failed: {e}")
+		        return {"error": str(e)}
+		'''
+		)
+		""";
 
 	/**
-	 * 创建 ToolCallback（供 CodeactSubAgentInterceptor 使用）
+	 * 创建 ToolCallback
 	 */
 	public static ToolCallback createWriteCodeToolCallback(
-			BaseAgentTaskTool taskTool,
 			CodeContext codeContext,
 			RuntimeEnvironmentManager environmentManager,
 			CodeFastIntentSupport codeFastIntentSupport) {
 
-		WriteCodeTool tool = new WriteCodeTool(taskTool, codeContext, environmentManager, codeFastIntentSupport);
+		WriteCodeTool tool = new WriteCodeTool(codeContext, environmentManager, codeFastIntentSupport);
 
 		return FunctionToolCallback.builder("write_code", tool)
-				.description("Generate and register a new function with specified name and parameters. " +
-						"IMPORTANT: You MUST provide both 'functionName' and 'parameters' fields. " +
-						"Example: write_code(requirement='calculate sum', functionName='calculate_sum', parameters=['a', 'b'])")
+				.description(WRITE_CODE_DESCRIPTION)
 				.inputType(Request.class)
 				.build();
 	}
 
-	// Backward-compatible factory
 	public static ToolCallback createWriteCodeToolCallback(
-			BaseAgentTaskTool taskTool,
 			CodeContext codeContext,
 			RuntimeEnvironmentManager environmentManager) {
-		return createWriteCodeToolCallback(taskTool, codeContext, environmentManager, (CodeFastIntentSupport) null);
+		return createWriteCodeToolCallback(codeContext, environmentManager, null);
 	}
 
 	/**
@@ -337,24 +372,29 @@ public class WriteCodeTool implements BiFunction<WriteCodeTool.Request, ToolCont
 	 */
 	public static class Request {
 		@JsonProperty(required = true)
-		@JsonPropertyDescription("Natural language description of what the function should do")
-		public String requirement;
-
-		@JsonProperty(required = true)
-		@JsonPropertyDescription("The exact name of the function to generate")
+		@JsonPropertyDescription("The exact name of the function to register (snake_case format)")
 		public String functionName;
 
+		@JsonProperty(required = true)
+		@JsonPropertyDescription("Description of what the function does")
+		public String description;
+
 		@JsonProperty
-		@JsonPropertyDescription("List of parameter names the function should accept")
+		@JsonPropertyDescription("List of parameter names the function accepts")
 		public List<String> parameters;
+
+		@JsonProperty(required = true)
+		@JsonPropertyDescription("Complete Python function code, including 'def' statement and implementation")
+		public String code;
 
 		public Request() {
 		}
 
-		public Request(String requirement, String functionName, List<String> parameters) {
-			this.requirement = requirement;
+		public Request(String functionName, String description, List<String> parameters, String code) {
 			this.functionName = functionName;
+			this.description = description;
 			this.parameters = parameters;
+			this.code = code;
 		}
 	}
 }

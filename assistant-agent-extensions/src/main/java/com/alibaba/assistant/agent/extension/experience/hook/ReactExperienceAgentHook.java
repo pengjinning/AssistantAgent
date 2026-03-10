@@ -1,8 +1,6 @@
 package com.alibaba.assistant.agent.extension.experience.hook;
 
 import com.alibaba.assistant.agent.common.constant.HookPriorityConstants;
-import com.alibaba.assistant.agent.common.hook.AgentPhase;
-import com.alibaba.assistant.agent.common.hook.HookPhases;
 import com.alibaba.cloud.ai.graph.agent.Prioritized;
 import com.alibaba.assistant.agent.extension.experience.config.ExperienceExtensionProperties;
 import com.alibaba.assistant.agent.extension.experience.model.Experience;
@@ -22,6 +20,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
@@ -42,10 +41,12 @@ import java.util.concurrent.CompletableFuture;
  *
  * 优先级：{@link HookPriorityConstants#REACT_EXPERIENCE_HOOK}（20），
  * 确保在快速意图 Hook（50）之前执行。
+ * 
+ * <p>4.1 重构后：取消了 Codeact 阶段的 LLM 调用，所有 Hooks 统一应用于 React 阶段，
+ * 不再需要 @HookPhases 注解区分阶段。
  *
  * @author Assistant Agent Team
  */
-@HookPhases(AgentPhase.REACT)
 @HookPositions(HookPosition.BEFORE_AGENT)
 public class ReactExperienceAgentHook extends AgentHook implements Prioritized {
 

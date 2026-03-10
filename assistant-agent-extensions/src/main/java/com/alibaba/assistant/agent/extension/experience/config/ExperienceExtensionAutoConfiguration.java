@@ -1,6 +1,5 @@
 package com.alibaba.assistant.agent.extension.experience.config;
 
-import com.alibaba.assistant.agent.extension.experience.hook.CodeExperienceModelHook;
 import com.alibaba.assistant.agent.extension.experience.hook.CommonSenseExperienceModelHook;
 import com.alibaba.assistant.agent.extension.experience.hook.FastIntentReactHook;
 import com.alibaba.assistant.agent.extension.experience.hook.ReactExperienceAgentHook;
@@ -84,20 +83,6 @@ public class ExperienceExtensionAutoConfiguration {
                                                    FastIntentService fastIntentService) {
         log.info("ExperienceExtensionAutoConfiguration#fastIntentReactHook - reason=creating fast intent react hook bean");
         return new FastIntentReactHook(experienceProvider, properties, fastIntentService);
-    }
-
-    /**
-     * 配置代码经验模型Hook
-     */
-    @Bean
-    @ConditionalOnProperty(prefix = "spring.ai.alibaba.codeact.extension.experience",
-                          name = "code-experience-enabled",
-                          havingValue = "true",
-                          matchIfMissing = true)
-    public CodeExperienceModelHook codeExperienceModelHook(ExperienceProvider experienceProvider,
-                                                          ExperienceExtensionProperties properties) {
-        log.info("ExperienceExtensionAutoConfiguration#codeExperienceModelHook - reason=creating code experience model hook bean");
-        return new CodeExperienceModelHook(experienceProvider, properties);
     }
 
     /**

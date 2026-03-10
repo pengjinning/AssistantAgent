@@ -15,8 +15,6 @@
  */
 package com.alibaba.assistant.agent.extension.evaluation.hook;
 
-import com.alibaba.assistant.agent.common.hook.AgentPhase;
-import com.alibaba.assistant.agent.common.hook.HookPhaseUtils;
 import com.alibaba.assistant.agent.extension.evaluation.config.CodeactEvaluationContextFactory;
 import com.alibaba.assistant.agent.extension.evaluation.store.OverAllStateEvaluationResultStore;
 import com.alibaba.assistant.agent.evaluation.EvaluationService;
@@ -42,13 +40,14 @@ import java.util.concurrent.CompletableFuture;
  * 
  * <p>子类需要：
  * <ul>
- *     <li>使用 {@code @HookPhases} 注解指定适用的 Agent 阶段（基类自动读取）</li>
  *     <li>实现 {@link #createEvaluationContext(OverAllState, RunnableConfig)} 方法创建评估上下文</li>
  * </ul>
+ * 
+ * <p>4.1 重构后：取消了 Codeact 阶段的 LLM 调用，所有 Hooks 统一应用于 React 阶段，
+ * 不再需要 @HookPhases 注解区分阶段。
  *
  * @author Assistant Agent Team
  * @see ReactBeforeModelEvaluationHook
- * @see CodeactBeforeModelEvaluationHook
  */
 @HookPositions(HookPosition.BEFORE_MODEL)
 public abstract class BeforeModelEvaluationHook extends ModelHook implements Prioritized {
@@ -106,9 +105,7 @@ public abstract class BeforeModelEvaluationHook extends ModelHook implements Pri
 
 	@Override
 	public String getName() {
-		AgentPhase[] phases = HookPhaseUtils.getHookPhases(this);
-		String phaseName = phases.length > 0 ? phases[0].name() : "UNKNOWN";
-		return "BeforeModelEvaluationHook-" + phaseName;
+		return "BeforeModelEvaluationHook";
 	}
 
 	@Override

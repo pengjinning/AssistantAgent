@@ -15,8 +15,6 @@
  */
 package com.alibaba.assistant.agent.extension.evaluation.hook;
 
-import com.alibaba.assistant.agent.common.hook.AgentPhase;
-import com.alibaba.assistant.agent.common.hook.HookPhases;
 import com.alibaba.assistant.agent.extension.evaluation.config.CodeactEvaluationContextFactory;
 import com.alibaba.assistant.agent.evaluation.EvaluationService;
 import com.alibaba.assistant.agent.evaluation.model.EvaluationContext;
@@ -29,14 +27,13 @@ import com.alibaba.cloud.ai.graph.RunnableConfig;
  * <p>在 React Agent（主 Agent）的模型调用前进行评估，
  * 关注用户输入和对话历史的增强与评估。
  * 
- * <p>通过 {@code @HookPhases(AgentPhase.REACT)} 注解声明阶段，
- * 基类会自动从注解中读取阶段信息。
+ * <p>4.1 重构后：取消了 Codeact 阶段的 LLM 调用，所有 Hooks 统一应用于 React 阶段，
+ * 不再需要 @HookPhases 注解区分阶段。
  *
  * @author Assistant Agent Team
  * @since 1.0.0
  * @see BeforeModelEvaluationHook
  */
-@HookPhases(AgentPhase.REACT)
 public class ReactBeforeModelEvaluationHook extends BeforeModelEvaluationHook {
 
     public ReactBeforeModelEvaluationHook(

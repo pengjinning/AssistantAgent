@@ -21,16 +21,12 @@ import com.alibaba.assistant.agent.evaluation.builder.EvaluationSuiteBuilder;
 import com.alibaba.assistant.agent.evaluation.evaluator.EvaluatorRegistry;
 import com.alibaba.assistant.agent.evaluation.evaluator.LLMBasedEvaluator;
 import com.alibaba.assistant.agent.evaluation.evaluator.RuleBasedEvaluator;
-import com.alibaba.assistant.agent.evaluation.model.CriterionResult;
-import com.alibaba.assistant.agent.evaluation.model.CriterionStatus;
 import com.alibaba.assistant.agent.evaluation.model.EvaluationCriterion;
 import com.alibaba.assistant.agent.evaluation.model.EvaluationSuite;
 import com.alibaba.assistant.agent.extension.evaluation.config.CodeactEvaluationContextFactory;
 import com.alibaba.assistant.agent.extension.evaluation.experience.ExperienceRetrievalEvaluatorFactory;
-import com.alibaba.assistant.agent.extension.evaluation.hook.CodeactBeforeModelEvaluationHook;
 import com.alibaba.assistant.agent.extension.evaluation.hook.ReactBeforeModelEvaluationHook;
 import com.alibaba.assistant.agent.extension.experience.spi.ExperienceProvider;
-import com.alibaba.assistant.agent.extension.prompt.CodeactPromptContributorModelHook;
 import com.alibaba.assistant.agent.extension.prompt.ReactPromptContributorModelHook;
 import com.alibaba.assistant.agent.prompt.PromptContributorManager;
 import com.alibaba.cloud.ai.graph.agent.hook.Hook;
@@ -50,9 +46,11 @@ import java.util.List;
 /**
  * 默认评估套件配置
  *
- * <p>提供 react-phase-suite 和 codeact-phase-suite 两个默认评估套件。
+ * <p>提供默认的评估套件。
  * 用户可以通过配置属性自定义评估行为，或通过实现 {@link EvaluationCriterionProvider}
  * 接口添加自定义 Criterion。
+ * 
+ * <p>4.1 重构后：取消了 Codeact 阶段的 LLM 调用，只保留一个统一的评估套件。
  *
  * @author Assistant Agent Team
  * @since 1.0.0
@@ -64,8 +62,17 @@ public class DefaultEvaluationSuiteConfig {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultEvaluationSuiteConfig.class);
 
-    public static final String REACT_PHASE_SUITE_ID = "react-phase-suite";
-    public static final String CODEACT_PHASE_SUITE_ID = "codeact-phase-suite";
+    /**
+     * 默认评估套件 ID
+     * <p>4.1 重构后统一使用此 ID，兼容旧配置中的 react-phase-suite
+     */
+    public static final String DEFAULT_SUITE_ID = "default-suite";
+    
+    /**
+     * @deprecated 使用 {@link #DEFAULT_SUITE_ID} 代替
+     */
+    @Deprecated
+    public static final String REACT_PHASE_SUITE_ID = DEFAULT_SUITE_ID;
 
     private final DefaultEvaluationProperties properties;
     private final ChatModel chatModel;
@@ -93,17 +100,11 @@ public class DefaultEvaluationSuiteConfig {
         log.info("DefaultEvaluationSuiteConfig#evaluationService - reason=创建默认 EvaluationService");
         DefaultEvaluationService service = new DefaultEvaluationService();
 
-        // 在创建 service 时就注册默认套件
-        if (properties.getReactPhase().isEnabled()) {
-            EvaluationSuite reactSuite = createReactPhaseSuite();
-            service.registerSuite(reactSuite);
-            log.info("DefaultEvaluationSuiteConfig#evaluationService - reason=注册 React Phase Suite, suiteId={}", REACT_PHASE_SUITE_ID);
-        }
-
-        if (properties.getCodeactPhase().isEnabled()) {
-            EvaluationSuite codeactSuite = createCodeActPhaseSuite();
-            service.registerSuite(codeactSuite);
-            log.info("DefaultEvaluationSuiteConfig#evaluationService - reason=注册 CodeAct Phase Suite, suiteId={}", CODEACT_PHASE_SUITE_ID);
+        // 注册默认评估套件
+        if (properties.isEnabled()) {
+            EvaluationSuite defaultSuite = createDefaultSuite();
+            service.registerSuite(defaultSuite);
+            log.info("DefaultEvaluationSuiteConfig#evaluationService - reason=注册默认评估套件, suiteId={}", DEFAULT_SUITE_ID);
         }
 
         return service;
@@ -120,31 +121,30 @@ public class DefaultEvaluationSuiteConfig {
     }
 
     /**
-     * React 阶段评估 Hooks
+     * 评估 Hooks
      * 
-     * <p>所有返回的 Hook 都通过 {@code @HookPhases(AgentPhase.REACT)} 注解声明，
-     * 会被 HookPhaseUtils 自动分配到 React Agent。
+     * <p>4.1 重构后：取消了 Codeact 阶段的 LLM 调用，所有 Hooks 统一应用。
      */
     @Bean
-    public List<Hook> reactPhaseEvaluationHooks(
+    public List<Hook> evaluationHooks(
             EvaluationService evaluationService,
             CodeactEvaluationContextFactory contextFactory,
             @Autowired(required = false) PromptContributorManager promptContributorManager) {
 
         List<Hook> hooks = new ArrayList<>();
 
-		if (properties.getReactPhase().isEnabled()) {
-            // 评估 Hook（使用 @HookPhases 注解声明阶段）
+		if (properties.isEnabled()) {
+            // 评估 Hook
             ReactBeforeModelEvaluationHook evaluationHook = new ReactBeforeModelEvaluationHook(
-                    evaluationService, contextFactory, REACT_PHASE_SUITE_ID);
+                    evaluationService, contextFactory, DEFAULT_SUITE_ID);
             hooks.add(evaluationHook);
-            log.info("DefaultEvaluationSuiteConfig#reactPhaseEvaluationHooks - reason=创建 React Phase BeforeModelEvaluationHook");
+            log.info("DefaultEvaluationSuiteConfig#evaluationHooks - reason=创建 BeforeModelEvaluationHook");
 
-            // Prompt 贡献者 Hook - 共享同一个 Manager，Contributor 在 shouldContribute() 中通过 context.getPhase() 判断
+            // Prompt 贡献者 Hook
             if (promptContributorManager != null) {
                 ReactPromptContributorModelHook promptHook = new ReactPromptContributorModelHook(promptContributorManager);
                 hooks.add(promptHook);
-                log.info("DefaultEvaluationSuiteConfig#reactPhaseEvaluationHooks - reason=创建 React Phase PromptContributorModelHook");
+                log.info("DefaultEvaluationSuiteConfig#evaluationHooks - reason=创建 PromptContributorModelHook");
             }
         }
 
@@ -152,41 +152,9 @@ public class DefaultEvaluationSuiteConfig {
     }
 
     /**
-     * CodeAct 阶段评估 Hooks
-     * 
-     * <p>所有返回的 Hook 都通过 {@code @HookPhases(AgentPhase.CODEACT)} 注解声明，
-     * 会被 HookPhaseUtils 自动分配到 CodeAct Agent。
+     * 创建默认评估套件
      */
-    @Bean
-    public List<Hook> codeactPhaseEvaluationHooks(
-            EvaluationService evaluationService,
-            CodeactEvaluationContextFactory contextFactory,
-            @Autowired(required = false) PromptContributorManager promptContributorManager) {
-
-        List<Hook> hooks = new ArrayList<>();
-
-		if (properties.getCodeactPhase().isEnabled()) {
-            // 评估 Hook（使用 @HookPhases 注解声明阶段）
-            CodeactBeforeModelEvaluationHook evaluationHook = new CodeactBeforeModelEvaluationHook(
-                    evaluationService, contextFactory, CODEACT_PHASE_SUITE_ID);
-            hooks.add(evaluationHook);
-            log.info("DefaultEvaluationSuiteConfig#codeactPhaseEvaluationHooks - reason=创建 CodeAct Phase BeforeModelEvaluationHook");
-
-            // Prompt 贡献者 Hook - 共享同一个 Manager，Contributor 在 shouldContribute() 中通过 context.getPhase() 判断
-            if (promptContributorManager != null) {
-                CodeactPromptContributorModelHook promptHook = new CodeactPromptContributorModelHook(promptContributorManager);
-                hooks.add(promptHook);
-                log.info("DefaultEvaluationSuiteConfig#codeactPhaseEvaluationHooks - reason=创建 CodeAct Phase PromptContributorModelHook");
-            }
-        }
-
-        return hooks;
-    }
-
-    /**
-     * 创建 React 阶段评估套件
-     */
-    private EvaluationSuite createReactPhaseSuite() {
+    private EvaluationSuite createDefaultSuite() {
         EvaluatorRegistry registry = createDefaultEvaluatorRegistry();
 
         List<EvaluationCriterion> criteria = new ArrayList<>();
@@ -194,48 +162,19 @@ public class DefaultEvaluationSuiteConfig {
         // 添加用户自定义的 Criterion（由 example 层提供，包括 enhanced_user_input）
         if (criterionProviders != null) {
             for (EvaluationCriterionProvider provider : criterionProviders) {
-                List<EvaluationCriterion> customCriteria = provider.getReactPhaseCriteria();
+                List<EvaluationCriterion> customCriteria = provider.getCriteria();
                 if (customCriteria != null && !customCriteria.isEmpty()) {
                     criteria.addAll(customCriteria);
-                    log.info("DefaultEvaluationSuiteConfig#createReactPhaseSuite - reason=添加自定义 Criterion, provider={}, count={}",
+                    log.info("DefaultEvaluationSuiteConfig#createDefaultSuite - reason=添加自定义 Criterion, provider={}, count={}",
                             provider.getClass().getSimpleName(), customCriteria.size());
                 }
             }
         }
 
         return EvaluationSuiteBuilder
-                .create(REACT_PHASE_SUITE_ID, registry)
-                .name("React Phase Evaluation Suite")
-                .description("React阶段默认评估套件：用户输入增强")
-                .defaultEvaluator("llm-based")
-                .addCriteria(criteria.toArray(new EvaluationCriterion[0]))
-                .build();
-    }
-
-    /**
-     * 创建 CodeAct 阶段评估套件
-     */
-    private EvaluationSuite createCodeActPhaseSuite() {
-        EvaluatorRegistry registry = createDefaultEvaluatorRegistry();
-
-        List<EvaluationCriterion> criteria = new ArrayList<>();
-
-        // 添加用户自定义的 Criterion（由 example 层提供，包括 enhanced_user_input）
-        if (criterionProviders != null) {
-            for (EvaluationCriterionProvider provider : criterionProviders) {
-                List<EvaluationCriterion> customCriteria = provider.getCodeActPhaseCriteria();
-                if (customCriteria != null && !customCriteria.isEmpty()) {
-                    criteria.addAll(customCriteria);
-                    log.info("DefaultEvaluationSuiteConfig#createCodeActPhaseSuite - reason=添加自定义 Criterion, provider={}, count={}",
-                            provider.getClass().getSimpleName(), customCriteria.size());
-                }
-            }
-        }
-
-        return EvaluationSuiteBuilder
-                .create(CODEACT_PHASE_SUITE_ID, registry)
-                .name("CodeAct Phase Evaluation Suite")
-                .description("CodeAct阶段默认评估套件：代码任务增强")
+                .create(DEFAULT_SUITE_ID, registry)
+                .name("Default Evaluation Suite")
+                .description("默认评估套件：用户输入增强")
                 .defaultEvaluator("llm-based")
                 .addCriteria(criteria.toArray(new EvaluationCriterion[0]))
                 .build();
@@ -246,7 +185,6 @@ public class DefaultEvaluationSuiteConfig {
      *
      * <p>Starter 层自动装配：
      * - LLM 评估器
-     * - 透传评估器
      * - 经验检索评估器（如果 ExperienceProvider 可用）
      */
     private EvaluatorRegistry createDefaultEvaluatorRegistry() {
@@ -256,35 +194,14 @@ public class DefaultEvaluationSuiteConfig {
         LLMBasedEvaluator llmEvaluator = new LLMBasedEvaluator(chatModel, "llm-based");
         registry.registerEvaluator(llmEvaluator);
 
-        // 规则评估器（透传）
-        RuleBasedEvaluator passthroughEvaluator = new RuleBasedEvaluator("passthrough", ctx -> {
-            CriterionResult result = new CriterionResult();
-            result.setCriterionName(ctx.getCriterion().getName());
-            result.setStatus(CriterionStatus.SUCCESS);
-            result.setValue(ctx.getInputContext().getInput().getOrDefault("user_input", ""));
-            return result;
-        });
-        registry.registerEvaluator(passthroughEvaluator);
 
         // 自动注册经验检索评估器（如果 ExperienceProvider 可用）
         if (experienceProvider != null && properties.getExperience().isEnabled()) {
             int maxExperiences = properties.getExperience().getMaxExperiencesPerType();
-
-            // React 阶段经验评估器
-            if (properties.getExperience().isReactPhaseEnabled()) {
-                RuleBasedEvaluator reactExpEvaluator = ExperienceRetrievalEvaluatorFactory.createReactPhaseEvaluator(
-                        experienceProvider, maxExperiences);
-                registry.registerEvaluator(reactExpEvaluator);
-                log.info("DefaultEvaluationSuiteConfig#createDefaultEvaluatorRegistry - reason=注册 React 阶段经验检索评估器");
-            }
-
-            // CodeAct 阶段经验评估器
-            if (properties.getExperience().isCodeactPhaseEnabled()) {
-                RuleBasedEvaluator codeactExpEvaluator = ExperienceRetrievalEvaluatorFactory.createCodeActPhaseEvaluator(
-                        experienceProvider, maxExperiences);
-                registry.registerEvaluator(codeactExpEvaluator);
-                log.info("DefaultEvaluationSuiteConfig#createDefaultEvaluatorRegistry - reason=注册 CodeAct 阶段经验检索评估器");
-            }
+            RuleBasedEvaluator expEvaluator = ExperienceRetrievalEvaluatorFactory.createExperienceEvaluator(
+                    experienceProvider, maxExperiences);
+            registry.registerEvaluator(expEvaluator);
+            log.info("DefaultEvaluationSuiteConfig#createDefaultEvaluatorRegistry - reason=注册经验检索评估器");
         }
 
         return registry;

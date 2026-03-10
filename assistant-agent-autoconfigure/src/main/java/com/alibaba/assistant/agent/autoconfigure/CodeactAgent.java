@@ -27,11 +27,12 @@ import com.alibaba.assistant.agent.core.tool.DefaultCodeactToolRegistry;
 import com.alibaba.assistant.agent.core.tool.ToolRegistryBridgeFactory;
 import com.alibaba.assistant.agent.core.tool.schema.ReturnSchemaRegistry;
 import com.alibaba.assistant.agent.extension.experience.config.ExperienceExtensionProperties;
+import com.alibaba.assistant.agent.extension.experience.fastintent.CodeFastIntentSupport;
 import com.alibaba.assistant.agent.extension.experience.fastintent.FastIntentService;
 import com.alibaba.assistant.agent.extension.experience.spi.ExperienceProvider;
-import com.alibaba.assistant.agent.autoconfigure.subagent.CodeactSubAgentInterceptor;
 import com.alibaba.assistant.agent.autoconfigure.tools.ExecuteCodeTool;
-import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
+import com.alibaba.assistant.agent.autoconfigure.tools.WriteCodeTool;
+import com.alibaba.assistant.agent.autoconfigure.tools.WriteConditionCodeTool;
 import com.alibaba.cloud.ai.graph.CompileConfig;
 import com.alibaba.cloud.ai.graph.GraphLifecycleListener;
 import com.alibaba.cloud.ai.graph.OverAllState;
@@ -47,10 +48,7 @@ import com.alibaba.cloud.ai.graph.checkpoint.BaseCheckpointSaver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.chat.model.ToolContext;
-import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.util.StringUtils;
@@ -58,8 +56,6 @@ import org.springframework.util.StringUtils;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
-import java.util.function.BiFunction;
 
 /**
  * CodeactAgent - Code as Action Agent.
@@ -157,6 +153,13 @@ public class CodeactAgent extends ReactAgent {
 
 	/**
 	 * Builder for CodeactAgent that extends ReactAgent.Builder.
+	 * 
+	 * <p>4.1 重构说明：
+	 * <ul>
+	 *   <li>移除了 subAgentHooks、subAgentSystemPrompt、stateKeysToPropagate 等 SubAgent 相关配置</li>
+	 *   <li>write_code 工具现在直接接收完整代码，不再调用 SubAgent 生成代码</li>
+	 *   <li>所有 Hooks 统一通过 hooks() 方法配置，不再区分阶段</li>
+	 * </ul>
 	 */
 	public static class CodeactAgentBuilder extends Builder {
 
@@ -165,7 +168,6 @@ public class CodeactAgent extends ReactAgent {
 		private CodeContext codeContext;
 		private RuntimeEnvironmentManager environmentManager;
 		private GraalCodeExecutor executor;
-		private BiFunction<String, ToolContext, String> codeGenerator;
 		private boolean enableInitialCodeGen = true;
 		private boolean allowIO = false;
 		private boolean allowNativeAccess = false;
@@ -183,25 +185,10 @@ public class CodeactAgent extends ReactAgent {
 		// CodeactTool support (新机制)
 		private List<CodeactTool> codeactTools = new ArrayList<>();
 
-		// SubAgent Hooks
-		private List<Hook> subAgentHooks = new ArrayList<>();
-
 		// Experience / FastIntent (optional, for WriteCodeTool fastpath)
 		private ExperienceProvider experienceProvider;
 		private ExperienceExtensionProperties experienceExtensionProperties;
 		private FastIntentService fastIntentService;
-
-		// Code generation model name
-		private String codeGenerationModelName;
-
-		// Keep reference to ChatModel for code generation
-		private ChatModel chatModel;
-
-		// SubAgent system prompt (for Codeact phase code generation)
-		private String subAgentSystemPrompt;
-
-		// state keys to propagate from parent agent (react phase) to child agent (codeact phase)
-		private List<String> stateKeysToPropagate = new ArrayList<>();
 
 		// GraphLifecycleListeners (用于可观测性)
 		private List<GraphLifecycleListener> lifecycleListeners = new ArrayList<>();
@@ -240,38 +227,6 @@ public class CodeactAgent extends ReactAgent {
 			return this;
 		}
 
-		/**
-		 * Set custom code generator (SubAgent)
-		 */
-		public CodeactAgentBuilder codeGenerator(BiFunction<String, ToolContext, String> codeGenerator) {
-			this.codeGenerator = codeGenerator;
-			return this;
-		}
-
-		/**
-		 * Set hooks for sub-agents (e.g. CodeGeneratorSubAgent)
-		 */
-		public CodeactAgentBuilder subAgentHooks(List<Hook> hooks) {
-			this.subAgentHooks = hooks;
-			return this;
-		}
-
-		/**
-		 * Set state keys to propagate from parent agent (react phase) to child agent (codeact phase)
-		 */
-		public CodeactAgentBuilder stateKeysToPropagate(List<String> keys) {
-			this.stateKeysToPropagate = keys != null ? new ArrayList<>(keys) : new ArrayList<>();
-			return this;
-		}
-
-		/**
-		 * Set state keys to propagate from parent agent (react phase) to child agent (codeact phase), in variable argument form
-		 */
-		public CodeactAgentBuilder stateKeysToPropagate(String... keys) {
-			this.stateKeysToPropagate = new ArrayList<>(Arrays.asList(keys));
-			return this;
-		}
-
 		public CodeactAgentBuilder experienceProvider(ExperienceProvider experienceProvider) {
 			this.experienceProvider = experienceProvider;
 			return this;
@@ -284,14 +239,6 @@ public class CodeactAgent extends ReactAgent {
 
 		public CodeactAgentBuilder fastIntentService(FastIntentService fastIntentService) {
 			this.fastIntentService = fastIntentService;
-			return this;
-		}
-
-		/**
-		 * Set custom system prompt for the Codeact sub-agent (code generation phase).
-		 */
-		public CodeactAgentBuilder subAgentSystemPrompt(String systemPrompt) {
-			this.subAgentSystemPrompt = systemPrompt;
 			return this;
 		}
 
@@ -431,15 +378,6 @@ public class CodeactAgent extends ReactAgent {
 			return this;
 		}
 
-		/**
-		 * Set the model name for code generation
-		 * For example: "qwen-coder-plus", "qwen-max", etc.
-		 */
-		public CodeactAgentBuilder codeGenerationModelName(String modelName) {
-			this.codeGenerationModelName = modelName;
-			return this;
-		}
-
 		// Override parent methods to provide CodeactAgentBuilder return type
 		@Override
 		public CodeactAgentBuilder name(String name) {
@@ -462,11 +400,6 @@ public class CodeactAgent extends ReactAgent {
 		@Override
 		public CodeactAgentBuilder systemPrompt(String systemPrompt) {
 			super.systemPrompt(systemPrompt);
-			return this;
-		}
-
-		public CodeactAgentBuilder codingChatModel(ChatModel chatModel) {
-			this.chatModel = chatModel;
 			return this;
 		}
 
@@ -673,16 +606,13 @@ public class CodeactAgent extends ReactAgent {
 				this.executionTimeoutMs
 			);
 
-			// 创建 CodeactSubAgentInterceptor（替代旧的 codeGenerator 方式）
-			Interceptor codeactSubAgentInterceptor = createCodeactSubAgentInterceptor();
-
-			// 将 CodeactSubAgentInterceptor 添加到拦截器列表
-			super.interceptors(codeactSubAgentInterceptor);
-            super.modelInterceptors.add((ModelInterceptor) codeactSubAgentInterceptor);
-
+			// 4.1 重构：直接创建 write_code 和 execute_code 工具，不再使用 SubAgent
+			CodeFastIntentSupport codeFastIntentSupport = 
+				(experienceProvider != null && experienceExtensionProperties != null && fastIntentService != null)
+					? new CodeFastIntentSupport(experienceProvider, experienceExtensionProperties, fastIntentService)
+					: null;
+			
 			ExecuteCodeTool executeCodeTool = new ExecuteCodeTool(this.executor, this.codeContext, this.variableProvider);
-
-			// Note: InitialCodeGenHook 已废弃，代码生成通过 SubAgent 机制实现
 
 			// Manually create the components like DefaultBuilder does
 			// but return CodeactAgent instead
@@ -748,18 +678,23 @@ public class CodeactAgent extends ReactAgent {
 				}
 			}
 
-			// Combine all tools: interceptorTools + regularTools
-			// Note: write_code 和 write_condition_code 由 CodeactSubAgentInterceptor 提供
+			// Combine all tools
 			List<ToolCallback> allTools = new ArrayList<>();
-			allTools.addAll(interceptorTools);  // 从拦截器提取的工具（包括write_code, write_condition_code）
+			allTools.addAll(interceptorTools);
 			if (tools != null) {
-				allTools.addAll(tools);  // 用户注册的工具
+				allTools.addAll(tools);
 			}
 
-			// 添加 execute_code 工具
+			// 4.1 重构：直接添加 write_code、write_condition_code、execute_code 工具
+			allTools.add(WriteCodeTool.createWriteCodeToolCallback(
+				this.codeContext, this.environmentManager, codeFastIntentSupport));
+			
+			allTools.add(WriteConditionCodeTool.createWriteConditionCodeToolCallback(
+				this.codeContext, this.environmentManager, codeFastIntentSupport));
+			
 			allTools.add(
 				FunctionToolCallback.builder("execute_code", executeCodeTool)
-					.description("Execute a previously generated function by its exact name with matching parameters. " +
+					.description("Execute a previously registered function by its exact name with matching parameters. " +
 						"CRITICAL: The functionName MUST exactly match the name used in write_code. " +
 						"The 'args' parameter names MUST exactly match the 'parameters' specified in write_code. " +
 						"Example: If you called write_code with functionName='calculate_sum' and parameters=['a', 'b'], " +
@@ -769,7 +704,7 @@ public class CodeactAgent extends ReactAgent {
 					.build()
 			);
 
-			logger.info("CodeactAgentBuilder#build 工具收集完成: interceptorTools={}, regularTools={}, total={}",
+			logger.info("CodeactAgentBuilder#build 工具收集完成: interceptorTools={}, regularTools={}, codeactTools=3, total={}",
 				interceptorTools.size(), (tools != null ? tools.size() : 0), allTools.size());
 
             llmNodeBuilder.toolCallbacks(allTools);
@@ -890,179 +825,6 @@ public class CodeactAgent extends ReactAgent {
 				case JAVASCRIPT, JAVA -> throw new UnsupportedOperationException(
 					"Language not yet supported: " + language);
 			};
-		}
-
-		private BiFunction<String, ToolContext, String> createDefaultCodeGenerator() {
-			// Use LLM to generate Python code
-			return (requirement, toolContext) -> {
-				if (this.chatModel == null) {
-					throw new IllegalStateException(
-						"ChatModel is required for code generation. " +
-						"Please set a ChatModel using .model(chatModel) before building the agent."
-					);
-				}
-
-				// Extract function specification from context
-				@SuppressWarnings("unchecked")
-                Map<String, Object> codeGenSpec = (Map<String, Object>) toolContext.getContext().get("CODE_GEN_SPEC");
-				String functionName = codeGenSpec != null ? (String) codeGenSpec.get("functionName") : null;
-				@SuppressWarnings("unchecked")
-				List<String> parameters = codeGenSpec != null ? (List<String>) codeGenSpec.get("parameters") : null;
-
-				logger.info("CodeactAgentBuilder#createDefaultCodeGenerator 生成代码: functionName={}, parameters={}, requirement={}",
-					functionName, parameters, requirement);
-
-				// Build a detailed prompt for code generation
-				StringBuilder promptBuilder = new StringBuilder();
-				promptBuilder.append("请根据以下需求生成一个Python函数:\n\n");
-				promptBuilder.append("需求: ").append(requirement).append("\n\n");
-
-				// Add strict function name requirement
-				if (functionName != null && !functionName.trim().isEmpty()) {
-					promptBuilder.append("** 重要 **: 函数名必须是: ").append(functionName).append("\n");
-				}
-
-				// Add strict parameter requirements
-				if (parameters != null && !parameters.isEmpty()) {
-					promptBuilder.append("** 重要 **: 函数必须接受以下参数（按此顺序，参数名必须完全匹配）: ")
-						.append(String.join(", ", parameters)).append("\n\n");
-				} else {
-					promptBuilder.append("** 重要 **: 由于未指定参数列表，函数必须使用 **kwargs 接收可变关键字参数\n\n");
-				}
-
-				promptBuilder.append("代码生成要求:\n");
-				promptBuilder.append("1. 只生成一个函数定义，不要包含任何测试代码、示例调用或 if __name__ == '__main__' 块\n");
-
-				if (functionName != null) {
-					promptBuilder.append("2. 函数名必须严格使用: ").append(functionName).append("\n");
-				} else {
-					promptBuilder.append("2. 函数名要有意义，使用小写字母和下划线（snake_case）\n");
-				}
-
-				if (parameters != null && !parameters.isEmpty()) {
-					promptBuilder.append("3. 函数参数必须严格按照指定的参数列表: def ")
-						.append(functionName != null ? functionName : "function_name")
-						.append("(").append(String.join(", ", parameters)).append("):\n");
-				} else {
-					promptBuilder.append("3. 函数必须接受**kwargs作为参数: def ")
-						.append(functionName != null ? functionName : "function_name")
-						.append("(**kwargs):\n");
-				}
-
-				promptBuilder.append("4. 函数必须有清晰的文档字符串(docstring)，说明功能、参数和返回值\n");
-				promptBuilder.append("5. 使用类型提示(type hints)标注参数和返回值类型（如果明确类型的话）\n");
-				promptBuilder.append("6. 代码要简洁、高效、可读性强\n");
-				promptBuilder.append("7. 不要使用 markdown 代码块标记(```python 或 ```)，直接返回纯 Python 代码\n");
-				promptBuilder.append("8. 不要包含任何 import 语句，系统会自动添加常用的导入\n\n");
-
-				promptBuilder.append("示例格式:\n");
-				if (parameters != null && !parameters.isEmpty()) {
-					promptBuilder.append("def ").append(functionName != null ? functionName : "example_function")
-						.append("(").append(String.join(", ", parameters)).append("):\n");
-					promptBuilder.append("    \"\"\"函数功能描述。\n");
-					promptBuilder.append("    \n");
-					promptBuilder.append("    Args:\n");
-					for (String param : parameters) {
-						promptBuilder.append("        ").append(param).append(": 参数描述\n");
-					}
-					promptBuilder.append("    \n");
-					promptBuilder.append("    Returns:\n");
-					promptBuilder.append("        返回值的描述\n");
-					promptBuilder.append("    \"\"\"\n");
-					promptBuilder.append("    # 实现代码\n");
-					promptBuilder.append("    return result\n\n");
-				} else {
-					promptBuilder.append("def ").append(functionName != null ? functionName : "example_function")
-						.append("(**kwargs):\n");
-					promptBuilder.append("    \"\"\"函数功能描述。\n");
-					promptBuilder.append("    \n");
-					promptBuilder.append("    Args:\n");
-					promptBuilder.append("        **kwargs: 可变关键字参数\n");
-					promptBuilder.append("    \n");
-					promptBuilder.append("    Returns:\n");
-					promptBuilder.append("        返回值的描述\n");
-					promptBuilder.append("    \"\"\"\n");
-					promptBuilder.append("    # 实现代码\n");
-					promptBuilder.append("    return result\n\n");
-				}
-
-				promptBuilder.append("现在请严格按照上述要求生成代码:");
-
-				String prompt = promptBuilder.toString();
-
-				try {
-					String response;
-					if (this.codeGenerationModelName != null && !this.codeGenerationModelName.isEmpty()) {
-						// Use specified model for code generation
-						logger.info("CodeactAgentBuilder#createDefaultCodeGenerator 使用指定模型生成代码: {}", this.codeGenerationModelName);
-						response = this.chatModel.call(
-							Prompt.builder()
-								.messages(new UserMessage(prompt))
-                                    .chatOptions(DashScopeChatOptions.builder()
-                                            .withModel(this.codeGenerationModelName)
-									.build())
-								.build()
-						).getResult().getOutput().getText();
-					} else {
-						// Use default model
-						response = this.chatModel.call(prompt);
-					}
-
-					// Clean up the response (remove markdown code blocks if present)
-					String cleanedCode = cleanUpGeneratedCode(response);
-
-					logger.info("CodeactAgentBuilder#createDefaultCodeGenerator 代码生成成功，代码长度: {} 字符", cleanedCode.length());
-					logger.debug("CodeactAgentBuilder#createDefaultCodeGenerator 生成的代码:\n{}", cleanedCode);
-
-					return cleanedCode;
-
-				} catch (Exception e) {
-					logger.error("CodeactAgentBuilder#createDefaultCodeGenerator 代码生成失败", e);
-					throw new RuntimeException("Code generation failed: " + e.getMessage(), e);
-				}
-			};
-		}
-
-		private String cleanUpGeneratedCode(String code) {
-			// Remove markdown code blocks
-			String cleaned = code.replaceAll("```python\\s*", "");
-			cleaned = cleaned.replaceAll("```\\s*$", "");
-			cleaned = cleaned.replaceAll("```\\s*", "");
-			cleaned = cleaned.trim();
-
-			return cleaned;
-		}
-
-		/**
-		 * 创建 CodeactSubAgentInterceptor（对标 DeepResearchAgent.subAgentAsInterceptors）
-		 */
-		private ModelInterceptor createCodeactSubAgentInterceptor() {
-			logger.info("CodeactAgentBuilder#createCodeactSubAgentInterceptor 创建子Agent拦截器");
-
-			// 使用当前配置的 model 和 codeactTools
-			ChatModel codeGenModel = this.chatModel != null ?
-				this.chatModel : this.model;
-
-			if (codeGenModel == null) {
-				throw new IllegalStateException("ChatModel is required for CodeactSubAgentInterceptor. " +
-					"Please set a ChatModel using .model(chatModel) before building the agent.");
-			}
-
-			return CodeactSubAgentInterceptor.builder()
-				.defaultModel(codeGenModel)
-				.defaultCodeactTools(this.codeactTools)
-				.defaultLanguage(language)
-				.codeContext(this.codeContext)
-				.environmentManager(this.environmentManager)
-				.experienceProvider(this.experienceProvider)
-				.experienceExtensionProperties(this.experienceExtensionProperties)
-				.fastIntentService(this.fastIntentService)
-				.includeDefaultCodeGenerator(true)  // 使用默认代码生成器
-				.hooks(this.subAgentHooks) // Pass sub-agent hooks
-				.returnSchemaRegistry(this.codeactToolRegistry != null ? this.codeactToolRegistry.getReturnSchemaRegistry() : null)
-				.stateKeysToPropagate(this.stateKeysToPropagate) // 传递需要跨 agent 传递的 state keys
-				.subAgentSystemPrompt(this.subAgentSystemPrompt)
-				.build();
 		}
 	}
 }
