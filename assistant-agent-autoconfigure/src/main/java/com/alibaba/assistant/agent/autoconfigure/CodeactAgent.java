@@ -15,6 +15,7 @@
  */
 package com.alibaba.assistant.agent.autoconfigure;
 
+import com.alibaba.assistant.agent.autoconfigure.hook.CodeactToolsStateInitHook;
 import com.alibaba.assistant.agent.common.enums.Language;
 import com.alibaba.assistant.agent.common.tools.CodeactTool;
 import com.alibaba.assistant.agent.core.context.CodeContext;
@@ -573,6 +574,9 @@ public class CodeactAgent extends ReactAgent {
 				logger.info("CodeactAgentBuilder#build - reason=CodeactTool注册完成, count={}", this.codeactTools.size());
 			}
 
+			// 自动注册 CodeactToolsStateInitHook 到 hooks 中，确保在 Agent 执行前初始化工具状态
+			this.hooks.add(new CodeactToolsStateInitHook(this.codeactToolRegistry));
+			logger.info("CodeactAgentBuilder#build - reason=自动注册CodeactToolsStateInitHook");
 
 			// Initialize CodeContext if not provided
 			if (this.codeContext == null) {
