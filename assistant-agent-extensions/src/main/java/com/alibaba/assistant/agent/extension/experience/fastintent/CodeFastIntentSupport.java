@@ -1,5 +1,6 @@
 package com.alibaba.assistant.agent.extension.experience.fastintent;
 
+import com.alibaba.assistant.agent.common.constant.HookPriorityConstants;
 import com.alibaba.assistant.agent.extension.experience.config.ExperienceExtensionProperties;
 import com.alibaba.assistant.agent.extension.experience.model.Experience;
 import com.alibaba.assistant.agent.extension.experience.model.ExperienceArtifact;
@@ -15,6 +16,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.model.ToolContext;
+import org.springframework.util.StringUtils;
 
 import java.util.HashMap;
 import java.util.List;
@@ -59,6 +61,11 @@ public class CodeFastIntentSupport {
             RunnableConfig config = (RunnableConfig) toolContext.getContext()
                     .get(ToolContextConstants.AGENT_CONFIG_CONTEXT_KEY);
 
+            if (isFastIntentActive(state)) {
+                log.info("CodeFastIntentSupport#tryHit - reason=skip CODE fast-intent because REACT fast-intent is already active");
+                return Optional.empty();
+            }
+
             String input = state != null ? state.value("input", String.class).orElse(null) : null;
             Map<String, Object> md = config != null ? config.metadata().orElse(Map.of()) : Map.of();
             @SuppressWarnings("unchecked")
@@ -66,9 +73,19 @@ public class CodeFastIntentSupport {
 
             FastIntentContext ctx = new FastIntentContext(input, messages, md, state, toolRequest);
 
-            ExperienceQueryContext queryContext = buildQueryContext(state, config, language);
+            ExperienceQueryContext queryContext = buildQueryContext(state, config, language, input);
+            // 使用 write_code 的 description 参数作为搜索文本，提升向量搜索召回率
+            String description = toolRequest != null ? (String) toolRequest.get("description") : null;
+            if (StringUtils.hasText(description)) {
+                queryContext.setUserQuery(description);
+            }
             ExperienceQuery query = new ExperienceQuery(ExperienceType.CODE);
-            query.setLimit(Math.max(20, properties.getMaxItemsPerQuery()));
+            query.setText(description);
+            query.setLimit(Math.max(40, properties.getMaxItemsPerQuery()));
+
+            log.info("CodeFastIntentSupport#tryHit - reason=querying code experiences, text={}, limit={}",
+                    description != null ? (description.length() > 50 ? description.substring(0, 50) + "..." : description) : "null",
+                    query.getLimit());
 
             List<Experience> candidates = experienceProvider.query(query, queryContext);
             Optional<Experience> bestOpt = fastIntentService.selectBestMatch(candidates, ctx);
@@ -91,8 +108,25 @@ public class CodeFastIntentSupport {
         }
     }
 
-    private ExperienceQueryContext buildQueryContext(OverAllState state, RunnableConfig config, String language) {
+    @SuppressWarnings("unchecked")
+    private boolean isFastIntentActive(OverAllState state) {
+        if (state == null) {
+            return false;
+        }
+        Object fastIntentObj = state.value(HookPriorityConstants.FAST_INTENT_STATE_KEY).orElse(null);
+        if (!(fastIntentObj instanceof Map<?, ?> fastIntentState)) {
+            return false;
+        }
+        Object hit = ((Map<String, Object>) fastIntentState).get("hit");
+        return Boolean.TRUE.equals(hit);
+    }
+
+    private ExperienceQueryContext buildQueryContext(OverAllState state, RunnableConfig config, String language, String userQuery) {
         ExperienceQueryContext queryContext = new ExperienceQueryContext();
+        // 关键修复：设置userQuery，用于向量搜索
+        if (userQuery != null && !userQuery.isBlank()) {
+            queryContext.setUserQuery(userQuery);
+        }
         if (state != null) {
             state.value("user_id", String.class).ifPresent(queryContext::setUserId);
             state.value("project_id", String.class).ifPresent(queryContext::setProjectId);
@@ -116,9 +150,9 @@ public class CodeFastIntentSupport {
         return fb != null ? fb : FastIntentConfig.FastIntentFallback.REFERENCE_ONLY;
     }
 
-    public static Map<String, Object> toolReqOf(String requirement, String functionName, List<String> parameters) {
+    public static Map<String, Object> toolReqOf(String description, String functionName, List<String> parameters) {
         Map<String, Object> toolReq = new HashMap<>();
-        toolReq.put("requirement", requirement);
+        toolReq.put("description", description);
         toolReq.put("functionName", functionName);
         toolReq.put("parameters", parameters != null ? parameters : List.of());
         return toolReq;
@@ -130,5 +164,4 @@ public class CodeFastIntentSupport {
         }
     }
 }
-
 
